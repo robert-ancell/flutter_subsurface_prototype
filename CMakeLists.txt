@@ -13,6 +13,7 @@ pkg_check_modules(GLESV2 REQUIRED IMPORTED_TARGET glesv2)
 
 add_executable(flutter-subsurface-prototype
     src/main.c
+    src/renderer.c
     src/subsurface_widget.c
 )
 
@@ -22,6 +23,7 @@ target_link_libraries(flutter-subsurface-prototype PRIVATE
     PkgConfig::WAYLAND_EGL
     PkgConfig::EGL
     PkgConfig::GLESV2
+    m
 )
 
 target_compile_options(flutter-subsurface-prototype PRIVATE -Wall -Wextra)

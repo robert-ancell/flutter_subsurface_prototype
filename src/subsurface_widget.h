@@ -1,5 +1,6 @@
 #pragma once
 
+#include <EGL/egl.h>
 #include <GLES2/gl2.h>
 #include <gtk/gtk.h>
 
@@ -9,7 +10,10 @@ G_BEGIN_DECLS
 G_DECLARE_FINAL_TYPE(SubsurfaceWidget, subsurface_widget,
                      SUBSURFACE, WIDGET, GtkWidget)
 
-GtkWidget *subsurface_widget_new(void);
+GtkWidget  *subsurface_widget_new(void);
+
+EGLDisplay  subsurface_widget_get_egl_display(SubsurfaceWidget *self);
+EGLContext  subsurface_widget_get_egl_context(SubsurfaceWidget *self);
 
 /**
  * subsurface_widget_present:

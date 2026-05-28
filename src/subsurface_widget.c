@@ -420,6 +420,14 @@ GtkWidget *subsurface_widget_new(void) {
     return g_object_new(SUBSURFACE_WIDGET_TYPE, NULL);
 }
 
+EGLDisplay subsurface_widget_get_egl_display(SubsurfaceWidget *self) {
+    return self->egl_display;
+}
+
+EGLContext subsurface_widget_get_egl_context(SubsurfaceWidget *self) {
+    return self->egl_context;
+}
+
 /* Main-thread callback that performs the actual render.
    Holds a strong reference to the widget (taken in subsurface_widget_present)
    so it is safe even if the widget is destroyed before the idle runs. */
