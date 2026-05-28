@@ -16,9 +16,9 @@ struct _Renderer {
     size_t height;
 
     /* GL resources — valid only on the render thread after setup_gl() */
-    GLuint fbo;
-    GLuint texture;
-    GLuint program;
+    GLuint                  fbo;
+    SubsurfaceBackingStore *backing_store;
+    GLuint                  program;
     GLuint vbo;
     GLint  position_loc;
     GLint  color_loc;
@@ -55,25 +55,21 @@ static GLuint compile_shader(GLenum type, const char *src) {
     return sh;
 }
 
-/* (Re)create the FBO and backing texture at r->width × r->height.
-   Any existing texture and FBO are deleted first. */
+/* (Re)create the FBO and backing store at r->width × r->height.
+   Any existing FBO and backing store are released first. */
 static gboolean create_fbo(Renderer *r) {
-    if (r->fbo)     { glDeleteFramebuffers(1, &r->fbo);  r->fbo     = 0; }
-    if (r->texture) { glDeleteTextures    (1, &r->texture); r->texture = 0; }
+    if (r->fbo) { glDeleteFramebuffers(1, &r->fbo); r->fbo = 0; }
+    subsurface_widget_collect_backing_store(r->widget, r->backing_store);
 
-    glGenTextures(1, &r->texture);
-    glBindTexture(GL_TEXTURE_2D, r->texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
-                 (GLsizei)r->width, (GLsizei)r->height,
-                 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    r->backing_store = subsurface_widget_create_backing_store(
+        r->widget, r->width, r->height);
+    if (!r->backing_store)
+        return FALSE;
 
     glGenFramebuffers(1, &r->fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, r->fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, r->texture, 0);
+                           GL_TEXTURE_2D, r->backing_store->texture, 0);
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -151,10 +147,11 @@ static gboolean setup_gl(Renderer *r) {
 }
 
 static void teardown_gl(Renderer *r) {
-    if (r->fbo)     { glDeleteFramebuffers(1, &r->fbo);  r->fbo     = 0; }
-    if (r->texture) { glDeleteTextures    (1, &r->texture); r->texture = 0; }
-    if (r->vbo)     { glDeleteBuffers     (1, &r->vbo);  r->vbo     = 0; }
-    if (r->program) { glDeleteProgram(r->program);        r->program = 0; }
+    if (r->fbo) { glDeleteFramebuffers(1, &r->fbo); r->fbo = 0; }
+    subsurface_widget_collect_backing_store(r->widget, r->backing_store);
+    r->backing_store = NULL;
+    if (r->vbo)     { glDeleteBuffers(1, &r->vbo);    r->vbo     = 0; }
+    if (r->program) { glDeleteProgram(r->program);    r->program = 0; }
 }
 
 static void render_frame(Renderer *r, float angle) {
@@ -231,8 +228,10 @@ static gpointer renderer_thread_func(gpointer data) {
         float angle   = elapsed * ((float)G_PI * 2.0f / 4.0f); /* one rotation per 4 s */
 
         render_frame(r, angle);
-        subsurface_widget_present(r->widget, r->texture, GL_RGBA,
-                                  r->width, r->height);
+        subsurface_widget_present(r->widget,
+                                  r->backing_store->texture, GL_RGBA,
+                                  r->backing_store->width,
+                                  r->backing_store->height);
     }
 
     teardown_gl(r);

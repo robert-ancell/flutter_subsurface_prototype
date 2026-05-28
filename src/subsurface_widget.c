@@ -488,3 +488,31 @@ void subsurface_widget_present(SubsurfaceWidget *self,
     if (!was_scheduled)
         g_main_context_invoke(NULL, do_present, self);
 }
+
+SubsurfaceBackingStore *
+subsurface_widget_create_backing_store(SubsurfaceWidget *self G_GNUC_UNUSED,
+                                       size_t            width,
+                                       size_t            height) {
+    SubsurfaceBackingStore *store = g_new0(SubsurfaceBackingStore, 1);
+    store->width  = width;
+    store->height = height;
+
+    glGenTextures(1, &store->texture);
+    glBindTexture(GL_TEXTURE_2D, store->texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
+                 (GLsizei)width, (GLsizei)height,
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    return store;
+}
+
+void subsurface_widget_collect_backing_store(SubsurfaceWidget       *self G_GNUC_UNUSED,
+                                             SubsurfaceBackingStore *backing_store) {
+    if (!backing_store)
+        return;
+    glDeleteTextures(1, &backing_store->texture);
+    g_free(backing_store);
+}

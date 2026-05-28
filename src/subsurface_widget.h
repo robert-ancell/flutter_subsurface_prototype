@@ -16,6 +16,51 @@ EGLDisplay  subsurface_widget_get_egl_display(SubsurfaceWidget *self);
 EGLContext  subsurface_widget_get_egl_context(SubsurfaceWidget *self);
 
 /**
+ * SubsurfaceBackingStore:
+ * @texture: OpenGL ES 2 texture name
+ * @width: width of the texture in pixels
+ * @height: height of the texture in pixels
+ *
+ * An off-screen render target owned by a #SubsurfaceWidget.
+ * Obtain one with subsurface_widget_create_backing_store() and release it
+ * with subsurface_widget_collect_backing_store() when it is no longer needed.
+ */
+typedef struct {
+    GLuint texture;
+    size_t width;
+    size_t height;
+} SubsurfaceBackingStore;
+
+/**
+ * subsurface_widget_create_backing_store:
+ * @self: the widget
+ * @width: texture width in pixels
+ * @height: texture height in pixels
+ *
+ * Allocates a new #SubsurfaceBackingStore containing a GL_RGBA texture of
+ * the given size.  Must be called with an EGL context that shares objects
+ * with the widget's context current on the calling thread (e.g. from the
+ * renderer thread).
+ *
+ * Returns: a newly allocated #SubsurfaceBackingStore; free with
+ *          subsurface_widget_collect_backing_store().
+ */
+SubsurfaceBackingStore *subsurface_widget_create_backing_store(
+    SubsurfaceWidget *self, size_t width, size_t height);
+
+/**
+ * subsurface_widget_collect_backing_store:
+ * @self: the widget
+ * @backing_store: the backing store to free
+ *
+ * Releases the GL texture and frees the #SubsurfaceBackingStore.  Must be
+ * called with an EGL context that shares objects with the widget's context
+ * current on the calling thread.
+ */
+void subsurface_widget_collect_backing_store(SubsurfaceWidget       *self,
+                                             SubsurfaceBackingStore *backing_store);
+
+/**
  * subsurface_widget_present:
  * @self: the widget
  * @texture_id: OpenGL ES 2 texture name, accessible from a context that
