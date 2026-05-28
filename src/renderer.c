@@ -205,7 +205,7 @@ static gpointer renderer_thread_func(gpointer data) {
 
     for (;;) {
         /* Sleep up to 10 ms; wake early if renderer_free() signals the cond. */
-        gint64 deadline = g_get_monotonic_time() + 10 * G_TIME_SPAN_MILLISECOND;
+        gint64 deadline = g_get_monotonic_time() + 100 * G_TIME_SPAN_MILLISECOND;
 
         g_mutex_lock(&r->mutex);
         g_cond_wait_until(&r->cond, &r->mutex, deadline);
