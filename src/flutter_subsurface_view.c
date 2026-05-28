@@ -1,4 +1,4 @@
-#include "subsurface_widget.h"
+#include "flutter_subsurface_view.h"
 
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
@@ -7,7 +7,7 @@
 #include <wayland-client.h>
 #include <wayland-egl.h>
 
-struct _SubsurfaceWidget {
+struct _FlutterSubsurfaceView {
     GtkWidget parent_instance;
 
     struct wl_compositor    *compositor;
@@ -35,14 +35,14 @@ struct _SubsurfaceWidget {
     size_t   present_height;
 };
 
-G_DEFINE_TYPE(SubsurfaceWidget, subsurface_widget, GTK_TYPE_WIDGET)
+G_DEFINE_TYPE(FlutterSubsurfaceView, flutter_subsurface_view, GTK_TYPE_WIDGET)
 
 /* ── Wayland registry ─────────────────────────────────────────────────────── */
 
 static void registry_global(void *data, struct wl_registry *registry,
                              uint32_t name, const char *interface,
                              uint32_t version) {
-    SubsurfaceWidget *self = data;
+    FlutterSubsurfaceView *self = data;
     if (strcmp(interface, wl_compositor_interface.name) == 0) {
         self->compositor = wl_registry_bind(
             registry, name, &wl_compositor_interface, MIN(version, 4));
@@ -80,7 +80,7 @@ static GLuint compile_shader(GLenum type, const char *src) {
     return shader;
 }
 
-static gboolean setup_gl(SubsurfaceWidget *self) {
+static gboolean setup_gl(FlutterSubsurfaceView *self) {
     /* Vertex shader: maps clip-space position to texture coordinates.
        (0,0) in texture space = bottom-left, matching OpenGL convention. */
     static const char *vert_src =
@@ -140,7 +140,7 @@ static gboolean setup_gl(SubsurfaceWidget *self) {
     return TRUE;
 }
 
-static void teardown_gl(SubsurfaceWidget *self) {
+static void teardown_gl(FlutterSubsurfaceView *self) {
     if (self->gl_vbo) {
         glDeleteBuffers(1, &self->gl_vbo);
         self->gl_vbo = 0;
@@ -153,7 +153,7 @@ static void teardown_gl(SubsurfaceWidget *self) {
 
 /* ── EGL helpers ──────────────────────────────────────────────────────────── */
 
-static gboolean setup_egl(SubsurfaceWidget *self, struct wl_display *display,
+static gboolean setup_egl(FlutterSubsurfaceView *self, struct wl_display *display,
                            size_t width, size_t height) {
     self->egl_display = eglGetDisplay((EGLNativeDisplayType)display);
     if (self->egl_display == EGL_NO_DISPLAY) {
@@ -218,7 +218,7 @@ static gboolean setup_egl(SubsurfaceWidget *self, struct wl_display *display,
 }
 
 /* Render a solid clear — used as the initial / resize frame. */
-static void render_clear(SubsurfaceWidget *self, size_t width, size_t height) {
+static void render_clear(FlutterSubsurfaceView *self, size_t width, size_t height) {
     eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
                    self->egl_context);
     glViewport(0, 0, width, height);
@@ -229,7 +229,7 @@ static void render_clear(SubsurfaceWidget *self, size_t width, size_t height) {
 
 /* Blit a caller-supplied texture to the full EGL surface.
    texture_format is stored for future use (e.g. YUV, external-OES). */
-static void render_texture(SubsurfaceWidget *self,
+static void render_texture(FlutterSubsurfaceView *self,
                             GLuint texture_id,
                             GLenum texture_format G_GNUC_UNUSED,
                             size_t width, size_t height) {
@@ -259,14 +259,14 @@ static void render_texture(SubsurfaceWidget *self,
 
 /* ── GtkWidget vfuncs ─────────────────────────────────────────────────────── */
 
-static void subsurface_widget_realize(GtkWidget *widget) {
-    SubsurfaceWidget *self = SUBSURFACE_WIDGET(widget);
+static void flutter_subsurface_view_realize(GtkWidget *widget) {
+    FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(widget);
 
-    GTK_WIDGET_CLASS(subsurface_widget_parent_class)->realize(widget);
+    GTK_WIDGET_CLASS(flutter_subsurface_view_parent_class)->realize(widget);
 
     GdkDisplay *gdk_display = gtk_widget_get_display(widget);
     if (!GDK_IS_WAYLAND_DISPLAY(gdk_display)) {
-        g_warning("SubsurfaceWidget requires a Wayland display");
+        g_warning("FlutterSubsurfaceView requires a Wayland display");
         return;
     }
 
@@ -313,8 +313,8 @@ static void subsurface_widget_realize(GtkWidget *widget) {
     render_clear(self, alloc.width, alloc.height);
 }
 
-static void subsurface_widget_unrealize(GtkWidget *widget) {
-    SubsurfaceWidget *self = SUBSURFACE_WIDGET(widget);
+static void flutter_subsurface_view_unrealize(GtkWidget *widget) {
+    FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(widget);
 
     if (self->egl_display != EGL_NO_DISPLAY) {
         eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
@@ -346,15 +346,15 @@ static void subsurface_widget_unrealize(GtkWidget *widget) {
         self->surface = NULL;
     }
 
-    GTK_WIDGET_CLASS(subsurface_widget_parent_class)->unrealize(widget);
+    GTK_WIDGET_CLASS(flutter_subsurface_view_parent_class)->unrealize(widget);
 }
 
-static void subsurface_widget_size_allocate(GtkWidget     *widget,
+static void flutter_subsurface_view_size_allocate(GtkWidget     *widget,
                                              GtkAllocation *allocation) {
-    GTK_WIDGET_CLASS(subsurface_widget_parent_class)
+    GTK_WIDGET_CLASS(flutter_subsurface_view_parent_class)
         ->size_allocate(widget, allocation);
 
-    SubsurfaceWidget *self = SUBSURFACE_WIDGET(widget);
+    FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(widget);
     if (!self->subsurface)
         return;
 
@@ -373,20 +373,20 @@ static void subsurface_widget_size_allocate(GtkWidget     *widget,
     }
 }
 
-static void subsurface_widget_get_preferred_width(GtkWidget *widget G_GNUC_UNUSED,
+static void flutter_subsurface_view_get_preferred_width(GtkWidget *widget G_GNUC_UNUSED,
                                                    gint *minimum, gint *natural) {
     *minimum = 1;
     *natural = 400;
 }
 
-static void subsurface_widget_get_preferred_height(GtkWidget *widget G_GNUC_UNUSED,
+static void flutter_subsurface_view_get_preferred_height(GtkWidget *widget G_GNUC_UNUSED,
                                                     gint *minimum, gint *natural) {
     *minimum = 1;
     *natural = 300;
 }
 
-static void subsurface_widget_finalize(GObject *object) {
-    SubsurfaceWidget *self = SUBSURFACE_WIDGET(object);
+static void flutter_subsurface_view_finalize(GObject *object) {
+    FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(object);
 
     g_mutex_clear(&self->present_mutex);
 
@@ -399,23 +399,23 @@ static void subsurface_widget_finalize(GObject *object) {
         self->compositor = NULL;
     }
 
-    G_OBJECT_CLASS(subsurface_widget_parent_class)->finalize(object);
+    G_OBJECT_CLASS(flutter_subsurface_view_parent_class)->finalize(object);
 }
 
-static void subsurface_widget_class_init(SubsurfaceWidgetClass *klass) {
+static void flutter_subsurface_view_class_init(FlutterSubsurfaceViewClass *klass) {
     GObjectClass    *object_class = G_OBJECT_CLASS(klass);
     GtkWidgetClass  *widget_class = GTK_WIDGET_CLASS(klass);
 
-    object_class->finalize = subsurface_widget_finalize;
+    object_class->finalize = flutter_subsurface_view_finalize;
 
-    widget_class->realize              = subsurface_widget_realize;
-    widget_class->unrealize            = subsurface_widget_unrealize;
-    widget_class->size_allocate        = subsurface_widget_size_allocate;
-    widget_class->get_preferred_width  = subsurface_widget_get_preferred_width;
-    widget_class->get_preferred_height = subsurface_widget_get_preferred_height;
+    widget_class->realize              = flutter_subsurface_view_realize;
+    widget_class->unrealize            = flutter_subsurface_view_unrealize;
+    widget_class->size_allocate        = flutter_subsurface_view_size_allocate;
+    widget_class->get_preferred_width  = flutter_subsurface_view_get_preferred_width;
+    widget_class->get_preferred_height = flutter_subsurface_view_get_preferred_height;
 }
 
-static void subsurface_widget_init(SubsurfaceWidget *self) {
+static void flutter_subsurface_view_init(FlutterSubsurfaceView *self) {
     gtk_widget_set_has_window(GTK_WIDGET(self), FALSE);
     self->egl_display = EGL_NO_DISPLAY;
     self->egl_context = EGL_NO_CONTEXT;
@@ -425,23 +425,23 @@ static void subsurface_widget_init(SubsurfaceWidget *self) {
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
-GtkWidget *subsurface_widget_new(void) {
-    return g_object_new(SUBSURFACE_WIDGET_TYPE, NULL);
+GtkWidget *flutter_subsurface_view_new(void) {
+    return g_object_new(FLUTTER_SUBSURFACE_VIEW_TYPE, NULL);
 }
 
-EGLDisplay subsurface_widget_get_egl_display(SubsurfaceWidget *self) {
+EGLDisplay flutter_subsurface_view_get_egl_display(FlutterSubsurfaceView *self) {
     return self->egl_display;
 }
 
-EGLContext subsurface_widget_get_egl_context(SubsurfaceWidget *self) {
+EGLContext flutter_subsurface_view_get_egl_context(FlutterSubsurfaceView *self) {
     return self->egl_context;
 }
 
 /* Main-thread callback that performs the actual render.
-   Holds a strong reference to the widget (taken in subsurface_widget_present)
+   Holds a strong reference to the widget (taken in flutter_subsurface_view_present)
    so it is safe even if the widget is destroyed before the idle runs. */
 static gboolean do_present(gpointer data) {
-    SubsurfaceWidget *self = SUBSURFACE_WIDGET(data);
+    FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(data);
 
     /* Snapshot the latest frame under the lock, then release before rendering
        so callers on other threads are never blocked by GPU work. */
@@ -472,7 +472,7 @@ static gboolean do_present(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
-void subsurface_widget_present(SubsurfaceWidget *self,
+void flutter_subsurface_view_present(FlutterSubsurfaceView *self,
                                GLuint            texture_id,
                                GLenum            texture_format,
                                size_t            width,
@@ -499,7 +499,7 @@ void subsurface_widget_present(SubsurfaceWidget *self,
 }
 
 SubsurfaceBackingStore *
-subsurface_widget_create_backing_store(SubsurfaceWidget *self G_GNUC_UNUSED,
+flutter_subsurface_view_create_backing_store(FlutterSubsurfaceView *self G_GNUC_UNUSED,
                                        size_t            width,
                                        size_t            height) {
     SubsurfaceBackingStore *store = g_new0(SubsurfaceBackingStore, 1);
@@ -518,7 +518,7 @@ subsurface_widget_create_backing_store(SubsurfaceWidget *self G_GNUC_UNUSED,
     return store;
 }
 
-void subsurface_widget_collect_backing_store(SubsurfaceWidget       *self G_GNUC_UNUSED,
+void flutter_subsurface_view_collect_backing_store(FlutterSubsurfaceView       *self G_GNUC_UNUSED,
                                              SubsurfaceBackingStore *backing_store) {
     if (!backing_store)
         return;

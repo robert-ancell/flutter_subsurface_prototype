@@ -1,7 +1,7 @@
 #include <gtk/gtk.h>
 
 #include "renderer.h"
-#include "subsurface_widget.h"
+#include "flutter_subsurface_view.h"
 
 typedef struct {
     Renderer *renderer;
@@ -32,7 +32,7 @@ static void activate(GtkApplication *app, gpointer user_data G_GNUC_UNUSED) {
     gtk_window_set_title(GTK_WINDOW(window), "Subsurface Prototype");
     gtk_window_set_default_size(GTK_WINDOW(window), 800, 600);
 
-    GtkWidget *widget = subsurface_widget_new();
+    GtkWidget *widget = flutter_subsurface_view_new();
     gtk_container_add(GTK_CONTAINER(window), widget);
 
     gtk_widget_show_all(window);
@@ -40,7 +40,7 @@ static void activate(GtkApplication *app, gpointer user_data G_GNUC_UNUSED) {
     /* Widget is realized after show_all; create the renderer now that the
        widget's EGL context exists. */
     AppData *app_data  = g_new0(AppData, 1);
-    app_data->renderer = renderer_new(SUBSURFACE_WIDGET(widget));
+    app_data->renderer = renderer_new(FLUTTER_SUBSURFACE_VIEW(widget));
 
     g_signal_connect(widget, "size-allocate",
                      G_CALLBACK(on_size_allocate), app_data);

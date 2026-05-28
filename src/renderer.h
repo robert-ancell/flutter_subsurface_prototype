@@ -1,6 +1,6 @@
 #pragma once
 
-#include "subsurface_widget.h"
+#include "flutter_subsurface_view.h"
 
 typedef struct _Renderer Renderer;
 
@@ -11,12 +11,12 @@ typedef struct _Renderer Renderer;
  * Creates a renderer that runs on its own thread.  The renderer owns an
  * EGL context that shares objects with @widget's context, renders a
  * rotating RGB triangle into an FBO-backed texture, and calls
- * subsurface_widget_present() every 10 ms.  The initial render size is
+ * flutter_subsurface_view_present() every 10 ms.  The initial render size is
  * taken from @widget's current allocation.
  *
  * Returns: a new #Renderer, or %NULL on failure.
  */
-Renderer *renderer_new(SubsurfaceWidget *widget);
+Renderer *renderer_new(FlutterSubsurfaceView *widget);
 
 /**
  * renderer_resize:

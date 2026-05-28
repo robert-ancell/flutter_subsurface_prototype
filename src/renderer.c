@@ -6,7 +6,7 @@
 #include <math.h>
 
 struct _Renderer {
-    SubsurfaceWidget *widget;
+    FlutterSubsurfaceView *widget;
 
     EGLDisplay egl_display;
     EGLContext egl_context;
@@ -59,9 +59,9 @@ static GLuint compile_shader(GLenum type, const char *src) {
    Any existing FBO and backing store are released first. */
 static gboolean create_fbo(Renderer *r) {
     if (r->fbo) { glDeleteFramebuffers(1, &r->fbo); r->fbo = 0; }
-    subsurface_widget_collect_backing_store(r->widget, r->backing_store);
+    flutter_subsurface_view_collect_backing_store(r->widget, r->backing_store);
 
-    r->backing_store = subsurface_widget_create_backing_store(
+    r->backing_store = flutter_subsurface_view_create_backing_store(
         r->widget, r->width, r->height);
     if (!r->backing_store)
         return FALSE;
@@ -148,7 +148,7 @@ static gboolean setup_gl(Renderer *r) {
 
 static void teardown_gl(Renderer *r) {
     if (r->fbo) { glDeleteFramebuffers(1, &r->fbo); r->fbo = 0; }
-    subsurface_widget_collect_backing_store(r->widget, r->backing_store);
+    flutter_subsurface_view_collect_backing_store(r->widget, r->backing_store);
     r->backing_store = NULL;
     if (r->vbo)     { glDeleteBuffers(1, &r->vbo);    r->vbo     = 0; }
     if (r->program) { glDeleteProgram(r->program);    r->program = 0; }
@@ -228,7 +228,7 @@ static gpointer renderer_thread_func(gpointer data) {
         float angle   = elapsed * ((float)G_PI * 2.0f / 4.0f); /* one rotation per 4 s */
 
         render_frame(r, angle);
-        subsurface_widget_present(r->widget,
+        flutter_subsurface_view_present(r->widget,
                                   r->backing_store->texture, GL_RGBA,
                                   r->backing_store->width,
                                   r->backing_store->height);
@@ -242,9 +242,9 @@ static gpointer renderer_thread_func(gpointer data) {
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
-Renderer *renderer_new(SubsurfaceWidget *widget) {
-    EGLDisplay egl_display   = subsurface_widget_get_egl_display(widget);
-    EGLContext share_context = subsurface_widget_get_egl_context(widget);
+Renderer *renderer_new(FlutterSubsurfaceView *widget) {
+    EGLDisplay egl_display   = flutter_subsurface_view_get_egl_display(widget);
+    EGLContext share_context = flutter_subsurface_view_get_egl_context(widget);
 
     if (egl_display == EGL_NO_DISPLAY || share_context == EGL_NO_CONTEXT) {
         g_warning("Renderer: widget has no EGL context (not on Wayland?)");
