@@ -211,6 +211,9 @@ static gboolean setup_egl(SubsurfaceWidget *self, struct wl_display *display,
 
     eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
                    self->egl_context);
+    /* Disable frame-callback throttling so eglSwapBuffers never blocks
+       waiting for the compositor to ack the previous frame. */
+    eglSwapInterval(self->egl_display, 0);
     return setup_gl(self);
 }
 
@@ -291,9 +294,9 @@ static void subsurface_widget_realize(GtkWidget *widget) {
     self->subsurface = wl_subcompositor_get_subsurface(
         self->subcompositor, self->surface, parent_surface);
 
-    /* Commit in sync with parent so position updates are applied together
-       with the parent surface's frame. */
-    wl_subsurface_set_sync(self->subsurface);
+    /* Desync so the subsurface commits independently without waiting for
+       the parent GTK surface to commit. */
+    wl_subsurface_set_desync(self->subsurface);
 
     gint x, y;
     gtk_widget_translate_coordinates(widget, toplevel, 0, 0, &x, &y);
