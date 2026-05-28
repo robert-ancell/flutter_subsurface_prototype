@@ -260,7 +260,7 @@ static gboolean do_queue_render(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
-void flutter_gl_area_view_present(FlutterGLAreaView *self,
+static void flutter_gl_area_view_present(FlutterGLAreaView *self,
                                    GLuint             texture_id,
                                    GLenum             texture_format,
                                    size_t             width,
@@ -285,7 +285,7 @@ void flutter_gl_area_view_present(FlutterGLAreaView *self,
         g_main_context_invoke(NULL, do_queue_render, self);
 }
 
-FlutterBackingStore *
+static FlutterBackingStore *
 flutter_gl_area_view_create_backing_store(FlutterGLAreaView *self G_GNUC_UNUSED,
                                           size_t             width,
                                           size_t             height) {
@@ -305,7 +305,7 @@ flutter_gl_area_view_create_backing_store(FlutterGLAreaView *self G_GNUC_UNUSED,
     return store;
 }
 
-void flutter_gl_area_view_collect_backing_store(FlutterGLAreaView   *self G_GNUC_UNUSED,
+static void flutter_gl_area_view_collect_backing_store(FlutterGLAreaView   *self G_GNUC_UNUSED,
                                                 FlutterBackingStore *backing_store) {
     if (!backing_store)
         return;

@@ -475,7 +475,7 @@ static gboolean do_present(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
-void flutter_subsurface_view_present(FlutterSubsurfaceView *self,
+static void flutter_subsurface_view_present(FlutterSubsurfaceView *self,
                                GLuint            texture_id,
                                GLenum            texture_format,
                                size_t            width,
@@ -501,7 +501,7 @@ void flutter_subsurface_view_present(FlutterSubsurfaceView *self,
         g_main_context_invoke(NULL, do_present, self);
 }
 
-FlutterBackingStore *
+static FlutterBackingStore *
 flutter_subsurface_view_create_backing_store(FlutterSubsurfaceView *self G_GNUC_UNUSED,
                                              size_t                 width,
                                              size_t                 height) {
@@ -521,7 +521,7 @@ flutter_subsurface_view_create_backing_store(FlutterSubsurfaceView *self G_GNUC_
     return store;
 }
 
-void flutter_subsurface_view_collect_backing_store(FlutterSubsurfaceView *self G_GNUC_UNUSED,
+static void flutter_subsurface_view_collect_backing_store(FlutterSubsurfaceView *self G_GNUC_UNUSED,
                                                    FlutterBackingStore   *backing_store) {
     if (!backing_store)
         return;

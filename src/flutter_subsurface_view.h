@@ -13,16 +13,4 @@ GtkWidget  *flutter_subsurface_view_new(void);
 EGLDisplay  flutter_subsurface_view_get_egl_display(FlutterSubsurfaceView *self);
 EGLContext  flutter_subsurface_view_get_egl_context(FlutterSubsurfaceView *self);
 
-FlutterBackingStore *flutter_subsurface_view_create_backing_store(
-    FlutterSubsurfaceView *self, size_t width, size_t height);
-
-void flutter_subsurface_view_collect_backing_store(FlutterSubsurfaceView *self,
-                                                   FlutterBackingStore   *backing_store);
-
-void flutter_subsurface_view_present(FlutterSubsurfaceView *self,
-                                     GLuint                 texture_id,
-                                     GLenum                 texture_format,
-                                     size_t                 width,
-                                     size_t                 height);
-
 G_END_DECLS
