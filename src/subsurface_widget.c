@@ -1,8 +1,11 @@
 #include "subsurface_widget.h"
 
+#include <EGL/egl.h>
+#include <GLES2/gl2.h>
 #include <gdk/gdkwayland.h>
 #include <string.h>
 #include <wayland-client.h>
+#include <wayland-egl.h>
 
 struct _SubsurfaceWidget {
     GtkWidget parent_instance;
@@ -11,6 +14,11 @@ struct _SubsurfaceWidget {
     struct wl_subcompositor *subcompositor;
     struct wl_surface *surface;
     struct wl_subsurface *subsurface;
+
+    struct wl_egl_window *egl_window;
+    EGLDisplay egl_display;
+    EGLContext egl_context;
+    EGLSurface egl_surface;
 };
 
 G_DEFINE_TYPE(SubsurfaceWidget, subsurface_widget, GTK_TYPE_WIDGET)
@@ -36,6 +44,75 @@ static const struct wl_registry_listener registry_listener = {
     .global = registry_global,
     .global_remove = registry_global_remove,
 };
+
+static gboolean setup_egl(SubsurfaceWidget *self, struct wl_display *display,
+                           gint width, gint height) {
+    self->egl_display = eglGetDisplay((EGLNativeDisplayType)display);
+    if (self->egl_display == EGL_NO_DISPLAY) {
+        g_warning("Failed to get EGL display");
+        return FALSE;
+    }
+
+    if (!eglInitialize(self->egl_display, NULL, NULL)) {
+        g_warning("Failed to initialize EGL");
+        return FALSE;
+    }
+
+    static const EGLint config_attribs[] = {
+        EGL_SURFACE_TYPE,    EGL_WINDOW_BIT,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+        EGL_RED_SIZE,        8,
+        EGL_GREEN_SIZE,      8,
+        EGL_BLUE_SIZE,       8,
+        EGL_ALPHA_SIZE,      8,
+        EGL_NONE,
+    };
+    EGLConfig config;
+    EGLint num_configs;
+    if (!eglChooseConfig(self->egl_display, config_attribs, &config, 1,
+                         &num_configs) ||
+        num_configs == 0) {
+        g_warning("Failed to choose EGL config");
+        return FALSE;
+    }
+
+    eglBindAPI(EGL_OPENGL_ES_API);
+
+    static const EGLint context_attribs[] = {
+        EGL_CONTEXT_CLIENT_VERSION, 2,
+        EGL_NONE,
+    };
+    self->egl_context = eglCreateContext(self->egl_display, config,
+                                         EGL_NO_CONTEXT, context_attribs);
+    if (self->egl_context == EGL_NO_CONTEXT) {
+        g_warning("Failed to create EGL context");
+        return FALSE;
+    }
+
+    self->egl_window = wl_egl_window_create(self->surface, width, height);
+    if (!self->egl_window) {
+        g_warning("Failed to create wl_egl_window");
+        return FALSE;
+    }
+
+    self->egl_surface = eglCreateWindowSurface(
+        self->egl_display, config, (EGLNativeWindowType)self->egl_window, NULL);
+    if (self->egl_surface == EGL_NO_SURFACE) {
+        g_warning("Failed to create EGL window surface");
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static void render(SubsurfaceWidget *self, gint width, gint height) {
+    eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
+                   self->egl_context);
+    glViewport(0, 0, width, height);
+    glClearColor(0.15f, 0.15f, 0.15f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    eglSwapBuffers(self->egl_display, self->egl_surface);
+}
 
 static void subsurface_widget_realize(GtkWidget *widget) {
     SubsurfaceWidget *self = SUBSURFACE_WIDGET(widget);
@@ -79,11 +156,35 @@ static void subsurface_widget_realize(GtkWidget *widget) {
     gint x, y;
     gtk_widget_translate_coordinates(widget, toplevel, 0, 0, &x, &y);
     wl_subsurface_set_position(self->subsurface, x, y);
-    wl_surface_commit(self->surface);
+
+    GtkAllocation alloc;
+    gtk_widget_get_allocation(widget, &alloc);
+    if (!setup_egl(self, display, alloc.width, alloc.height))
+        return;
+
+    render(self, alloc.width, alloc.height);
 }
 
 static void subsurface_widget_unrealize(GtkWidget *widget) {
     SubsurfaceWidget *self = SUBSURFACE_WIDGET(widget);
+
+    if (self->egl_display != EGL_NO_DISPLAY) {
+        eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                       EGL_NO_CONTEXT);
+        if (self->egl_surface != EGL_NO_SURFACE)
+            eglDestroySurface(self->egl_display, self->egl_surface);
+        if (self->egl_context != EGL_NO_CONTEXT)
+            eglDestroyContext(self->egl_display, self->egl_context);
+        eglTerminate(self->egl_display);
+        self->egl_surface = EGL_NO_SURFACE;
+        self->egl_context = EGL_NO_CONTEXT;
+        self->egl_display = EGL_NO_DISPLAY;
+    }
+
+    if (self->egl_window) {
+        wl_egl_window_destroy(self->egl_window);
+        self->egl_window = NULL;
+    }
 
     if (self->subsurface) {
         wl_subsurface_destroy(self->subsurface);
@@ -110,7 +211,12 @@ static void subsurface_widget_size_allocate(GtkWidget *widget,
     gint x, y;
     gtk_widget_translate_coordinates(widget, toplevel, 0, 0, &x, &y);
     wl_subsurface_set_position(self->subsurface, x, y);
-    wl_surface_commit(self->surface);
+
+    if (self->egl_window) {
+        wl_egl_window_resize(self->egl_window,
+                             allocation->width, allocation->height, 0, 0);
+        render(self, allocation->width, allocation->height);
+    }
 }
 
 static void subsurface_widget_get_preferred_width(GtkWidget *widget G_GNUC_UNUSED,
@@ -125,27 +231,6 @@ static void subsurface_widget_get_preferred_height(GtkWidget *widget G_GNUC_UNUS
                                                     gint *natural) {
     *minimum = 1;
     *natural = 300;
-}
-
-// Draw a placeholder so the widget area is visible before subsurface
-// content is connected.
-static gboolean subsurface_widget_draw(GtkWidget *widget, cairo_t *cr) {
-    GtkAllocation alloc;
-    gtk_widget_get_allocation(widget, &alloc);
-
-    cairo_set_source_rgb(cr, 0.15, 0.15, 0.15);
-    cairo_rectangle(cr, 0, 0, alloc.width, alloc.height);
-    cairo_fill(cr);
-
-    cairo_set_source_rgb(cr, 0.4, 0.4, 0.4);
-    cairo_set_line_width(cr, 1.5);
-    cairo_move_to(cr, 0, 0);
-    cairo_line_to(cr, alloc.width, alloc.height);
-    cairo_move_to(cr, alloc.width, 0);
-    cairo_line_to(cr, 0, alloc.height);
-    cairo_stroke(cr);
-
-    return FALSE;
 }
 
 static void subsurface_widget_finalize(GObject *object) {
@@ -174,11 +259,13 @@ static void subsurface_widget_class_init(SubsurfaceWidgetClass *klass) {
     widget_class->size_allocate = subsurface_widget_size_allocate;
     widget_class->get_preferred_width = subsurface_widget_get_preferred_width;
     widget_class->get_preferred_height = subsurface_widget_get_preferred_height;
-    widget_class->draw = subsurface_widget_draw;
 }
 
 static void subsurface_widget_init(SubsurfaceWidget *self) {
     gtk_widget_set_has_window(GTK_WIDGET(self), FALSE);
+    self->egl_display = EGL_NO_DISPLAY;
+    self->egl_context = EGL_NO_CONTEXT;
+    self->egl_surface = EGL_NO_SURFACE;
 }
 
 GtkWidget *subsurface_widget_new(void) {
