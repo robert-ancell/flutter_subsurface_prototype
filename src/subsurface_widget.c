@@ -294,9 +294,12 @@ static void subsurface_widget_realize(GtkWidget *widget) {
     self->subsurface = wl_subcompositor_get_subsurface(
         self->subcompositor, self->surface, parent_surface);
 
-    /* Desync so the subsurface commits independently without waiting for
-       the parent GTK surface to commit. */
-    wl_subsurface_set_desync(self->subsurface);
+    /* Sync mode: subsurface commits are cached and applied atomically when
+       the parent GTK window surface commits.  After each eglSwapBuffers we
+       call gtk_widget_queue_draw() to drive a GTK frame cycle, which causes
+       GDK to commit the parent surface and flush our pending subsurface
+       commit to the compositor. */
+    wl_subsurface_set_sync(self->subsurface);
 
     gint x, y;
     gtk_widget_translate_coordinates(widget, toplevel, 0, 0, &x, &y);
@@ -364,6 +367,9 @@ static void subsurface_widget_size_allocate(GtkWidget     *widget,
         wl_egl_window_resize(self->egl_window,
                              allocation->width, allocation->height, 0, 0);
         render_clear(self, allocation->width, allocation->height);
+        /* Drive a parent-surface commit so the cached subsurface commit
+           is applied (sync mode). */
+        gtk_widget_queue_draw(widget);
     }
 }
 
@@ -457,6 +463,9 @@ static gboolean do_present(gpointer data) {
             wl_egl_window_resize(self->egl_window, width, height, 0, 0);
 
         render_texture(self, texture_id, texture_format, width, height);
+        /* Drive a parent-surface commit so the compositor applies our
+           cached subsurface commit atomically (sync mode). */
+        gtk_widget_queue_draw(GTK_WIDGET(self));
     }
 
     g_object_unref(self);
