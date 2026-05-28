@@ -25,7 +25,10 @@ struct _FlutterGLAreaView {
     size_t   present_height;
 };
 
-G_DEFINE_TYPE(FlutterGLAreaView, flutter_gl_area_view, GTK_TYPE_GL_AREA)
+static void flutter_gl_area_view_iface_init(FlutterViewInterface *iface);
+
+G_DEFINE_TYPE_WITH_CODE(FlutterGLAreaView, flutter_gl_area_view, GTK_TYPE_GL_AREA,
+    G_IMPLEMENT_INTERFACE(FLUTTER_TYPE_VIEW, flutter_gl_area_view_iface_init))
 
 /* ── GL helpers ───────────────────────────────────────────────────────────── */
 
@@ -282,11 +285,11 @@ void flutter_gl_area_view_present(FlutterGLAreaView *self,
         g_main_context_invoke(NULL, do_queue_render, self);
 }
 
-FlutterGLAreaBackingStore *
+FlutterBackingStore *
 flutter_gl_area_view_create_backing_store(FlutterGLAreaView *self G_GNUC_UNUSED,
                                           size_t             width,
                                           size_t             height) {
-    FlutterGLAreaBackingStore *store = g_new0(FlutterGLAreaBackingStore, 1);
+    FlutterBackingStore *store = g_new0(FlutterBackingStore, 1);
     store->width  = width;
     store->height = height;
 
@@ -302,10 +305,38 @@ flutter_gl_area_view_create_backing_store(FlutterGLAreaView *self G_GNUC_UNUSED,
     return store;
 }
 
-void flutter_gl_area_view_collect_backing_store(FlutterGLAreaView         *self G_GNUC_UNUSED,
-                                                FlutterGLAreaBackingStore *backing_store) {
+void flutter_gl_area_view_collect_backing_store(FlutterGLAreaView   *self G_GNUC_UNUSED,
+                                                FlutterBackingStore *backing_store) {
     if (!backing_store)
         return;
     glDeleteTextures(1, &backing_store->texture);
     g_free(backing_store);
+}
+
+/* ── FlutterView interface ────────────────────────────────────────────────── */
+
+static FlutterBackingStore *
+gl_area_view_iface_create_backing_store(FlutterView *view, size_t width, size_t height) {
+    return flutter_gl_area_view_create_backing_store(
+        FLUTTER_GL_AREA_VIEW(view), width, height);
+}
+
+static void
+gl_area_view_iface_collect_backing_store(FlutterView         *view,
+                                         FlutterBackingStore *backing_store) {
+    flutter_gl_area_view_collect_backing_store(
+        FLUTTER_GL_AREA_VIEW(view), backing_store);
+}
+
+static void
+gl_area_view_iface_present(FlutterView *view, GLuint texture_id,
+                            GLenum texture_format, size_t width, size_t height) {
+    flutter_gl_area_view_present(FLUTTER_GL_AREA_VIEW(view),
+                                 texture_id, texture_format, width, height);
+}
+
+static void flutter_gl_area_view_iface_init(FlutterViewInterface *iface) {
+    iface->create_backing_store  = gl_area_view_iface_create_backing_store;
+    iface->collect_backing_store = gl_area_view_iface_collect_backing_store;
+    iface->present               = gl_area_view_iface_present;
 }

@@ -16,8 +16,8 @@ struct _Renderer {
     size_t height;
 
     /* GL resources — valid only on the render thread after setup_gl() */
-    GLuint                  fbo;
-    SubsurfaceBackingStore *backing_store;
+    GLuint               fbo;
+    FlutterBackingStore *backing_store;
     GLuint                  program;
     GLuint vbo;
     GLint  position_loc;

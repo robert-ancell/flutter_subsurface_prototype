@@ -35,7 +35,10 @@ struct _FlutterSubsurfaceView {
     size_t   present_height;
 };
 
-G_DEFINE_TYPE(FlutterSubsurfaceView, flutter_subsurface_view, GTK_TYPE_WIDGET)
+static void flutter_subsurface_view_iface_init(FlutterViewInterface *iface);
+
+G_DEFINE_TYPE_WITH_CODE(FlutterSubsurfaceView, flutter_subsurface_view, GTK_TYPE_WIDGET,
+    G_IMPLEMENT_INTERFACE(FLUTTER_TYPE_VIEW, flutter_subsurface_view_iface_init))
 
 /* ── Wayland registry ─────────────────────────────────────────────────────── */
 
@@ -498,11 +501,11 @@ void flutter_subsurface_view_present(FlutterSubsurfaceView *self,
         g_main_context_invoke(NULL, do_present, self);
 }
 
-SubsurfaceBackingStore *
+FlutterBackingStore *
 flutter_subsurface_view_create_backing_store(FlutterSubsurfaceView *self G_GNUC_UNUSED,
-                                       size_t            width,
-                                       size_t            height) {
-    SubsurfaceBackingStore *store = g_new0(SubsurfaceBackingStore, 1);
+                                             size_t                 width,
+                                             size_t                 height) {
+    FlutterBackingStore *store = g_new0(FlutterBackingStore, 1);
     store->width  = width;
     store->height = height;
 
@@ -518,10 +521,38 @@ flutter_subsurface_view_create_backing_store(FlutterSubsurfaceView *self G_GNUC_
     return store;
 }
 
-void flutter_subsurface_view_collect_backing_store(FlutterSubsurfaceView       *self G_GNUC_UNUSED,
-                                             SubsurfaceBackingStore *backing_store) {
+void flutter_subsurface_view_collect_backing_store(FlutterSubsurfaceView *self G_GNUC_UNUSED,
+                                                   FlutterBackingStore   *backing_store) {
     if (!backing_store)
         return;
     glDeleteTextures(1, &backing_store->texture);
     g_free(backing_store);
+}
+
+/* ── FlutterView interface ────────────────────────────────────────────────── */
+
+static FlutterBackingStore *
+subsurface_view_iface_create_backing_store(FlutterView *view, size_t width, size_t height) {
+    return flutter_subsurface_view_create_backing_store(
+        FLUTTER_SUBSURFACE_VIEW(view), width, height);
+}
+
+static void
+subsurface_view_iface_collect_backing_store(FlutterView         *view,
+                                            FlutterBackingStore *backing_store) {
+    flutter_subsurface_view_collect_backing_store(
+        FLUTTER_SUBSURFACE_VIEW(view), backing_store);
+}
+
+static void
+subsurface_view_iface_present(FlutterView *view, GLuint texture_id,
+                               GLenum texture_format, size_t width, size_t height) {
+    flutter_subsurface_view_present(FLUTTER_SUBSURFACE_VIEW(view),
+                                    texture_id, texture_format, width, height);
+}
+
+static void flutter_subsurface_view_iface_init(FlutterViewInterface *iface) {
+    iface->create_backing_store  = subsurface_view_iface_create_backing_store;
+    iface->collect_backing_store = subsurface_view_iface_collect_backing_store;
+    iface->present               = subsurface_view_iface_present;
 }
