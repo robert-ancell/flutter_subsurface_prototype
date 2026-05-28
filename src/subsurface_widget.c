@@ -68,9 +68,9 @@ static GLuint compile_shader(GLenum type, const char *src) {
     glShaderSource(shader, 1, &src, NULL);
     glCompileShader(shader);
 
-    GLint ok;
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
+    GLint compile_status;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compile_status);
+    if (compile_status == GL_FALSE) {
         char log[512];
         glGetShaderInfoLog(shader, sizeof(log), NULL, log);
         g_warning("Shader compile error: %s", log);
@@ -111,9 +111,9 @@ static gboolean setup_gl(SubsurfaceWidget *self) {
     glDeleteShader(vert);
     glDeleteShader(frag);
 
-    GLint ok;
-    glGetProgramiv(self->gl_program, GL_LINK_STATUS, &ok);
-    if (!ok) {
+    GLint link_status;
+    glGetProgramiv(self->gl_program, GL_LINK_STATUS, &link_status);
+    if (link_status == GL_FALSE) {
         char log[512];
         glGetProgramInfoLog(self->gl_program, sizeof(log), NULL, log);
         g_warning("Shader link error: %s", log);
