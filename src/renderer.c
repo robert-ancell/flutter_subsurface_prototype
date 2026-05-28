@@ -343,5 +343,6 @@ void renderer_resize(Renderer *r, size_t width, size_t height) {
     r->pending_width  = width;
     r->pending_height = height;
     r->resize_pending = TRUE;
+    g_cond_signal(&r->cond);
     g_mutex_unlock(&r->mutex);
 }
