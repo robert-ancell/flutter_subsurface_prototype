@@ -31,8 +31,8 @@ struct _SubsurfaceWidget {
     gboolean present_scheduled;
     GLuint   present_texture_id;
     GLenum   present_texture_format;
-    gint     present_width;
-    gint     present_height;
+    size_t   present_width;
+    size_t   present_height;
 };
 
 G_DEFINE_TYPE(SubsurfaceWidget, subsurface_widget, GTK_TYPE_WIDGET)
@@ -154,7 +154,7 @@ static void teardown_gl(SubsurfaceWidget *self) {
 /* ── EGL helpers ──────────────────────────────────────────────────────────── */
 
 static gboolean setup_egl(SubsurfaceWidget *self, struct wl_display *display,
-                           gint width, gint height) {
+                           size_t width, size_t height) {
     self->egl_display = eglGetDisplay((EGLNativeDisplayType)display);
     if (self->egl_display == EGL_NO_DISPLAY) {
         g_warning("Failed to get EGL display");
@@ -215,7 +215,7 @@ static gboolean setup_egl(SubsurfaceWidget *self, struct wl_display *display,
 }
 
 /* Render a solid clear — used as the initial / resize frame. */
-static void render_clear(SubsurfaceWidget *self, gint width, gint height) {
+static void render_clear(SubsurfaceWidget *self, size_t width, size_t height) {
     eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
                    self->egl_context);
     glViewport(0, 0, width, height);
@@ -229,7 +229,7 @@ static void render_clear(SubsurfaceWidget *self, gint width, gint height) {
 static void render_texture(SubsurfaceWidget *self,
                             GLuint texture_id,
                             GLenum texture_format G_GNUC_UNUSED,
-                            gint width, gint height) {
+                            size_t width, size_t height) {
     eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
                    self->egl_context);
     glViewport(0, 0, width, height);
@@ -431,8 +431,8 @@ static gboolean do_present(gpointer data) {
     g_mutex_lock(&self->present_mutex);
     GLuint texture_id     = self->present_texture_id;
     GLenum texture_format = self->present_texture_format;
-    gint   width          = self->present_width;
-    gint   height         = self->present_height;
+    size_t width          = self->present_width;
+    size_t height         = self->present_height;
     self->present_scheduled = FALSE;
     g_mutex_unlock(&self->present_mutex);
 
@@ -442,7 +442,7 @@ static gboolean do_present(gpointer data) {
         EGLint cur_w, cur_h;
         eglQuerySurface(self->egl_display, self->egl_surface, EGL_WIDTH,  &cur_w);
         eglQuerySurface(self->egl_display, self->egl_surface, EGL_HEIGHT, &cur_h);
-        if (cur_w != width || cur_h != height)
+        if ((size_t)cur_w != width || (size_t)cur_h != height)
             wl_egl_window_resize(self->egl_window, width, height, 0, 0);
 
         render_texture(self, texture_id, texture_format, width, height);
@@ -455,8 +455,8 @@ static gboolean do_present(gpointer data) {
 void subsurface_widget_present(SubsurfaceWidget *self,
                                GLuint            texture_id,
                                GLenum            texture_format,
-                               gint              width,
-                               gint              height) {
+                               size_t            width,
+                               size_t            height) {
     g_mutex_lock(&self->present_mutex);
 
     self->present_texture_id     = texture_id;

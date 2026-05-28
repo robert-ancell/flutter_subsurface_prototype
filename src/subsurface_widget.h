@@ -28,7 +28,7 @@ GtkWidget *subsurface_widget_new(void);
 void subsurface_widget_present(SubsurfaceWidget *self,
                                GLuint            texture_id,
                                GLenum            texture_format,
-                               gint              width,
-                               gint              height);
+                               size_t            width,
+                               size_t            height);
 
 G_END_DECLS
