@@ -3,12 +3,28 @@
 #include "renderer.h"
 #include "subsurface_widget.h"
 
+typedef struct {
+    Renderer *renderer;
+} AppData;
+
 /* Stop the renderer before the window tears down its EGL context. */
 static gboolean on_delete_event(GtkWidget *window   G_GNUC_UNUSED,
                                  GdkEvent  *event    G_GNUC_UNUSED,
-                                 gpointer   renderer) {
-    renderer_free(renderer);
+                                 gpointer   data) {
+    AppData *app_data = data;
+    renderer_free(app_data->renderer);
+    app_data->renderer = NULL;
     return FALSE;
+}
+
+static void on_size_allocate(GtkWidget     *widget     G_GNUC_UNUSED,
+                              GtkAllocation *allocation,
+                              gpointer       data) {
+    AppData *app_data = data;
+    if (app_data->renderer)
+        renderer_resize(app_data->renderer,
+                        (size_t)allocation->width,
+                        (size_t)allocation->height);
 }
 
 static void activate(GtkApplication *app, gpointer user_data G_GNUC_UNUSED) {
@@ -23,8 +39,15 @@ static void activate(GtkApplication *app, gpointer user_data G_GNUC_UNUSED) {
 
     /* Widget is realized after show_all; create the renderer now that the
        widget's EGL context exists. */
-    Renderer *r = renderer_new(SUBSURFACE_WIDGET(widget), 400, 300);
-    g_signal_connect(window, "delete-event", G_CALLBACK(on_delete_event), r);
+    AppData *app_data  = g_new0(AppData, 1);
+    app_data->renderer = renderer_new(SUBSURFACE_WIDGET(widget));
+
+    g_signal_connect(widget, "size-allocate",
+                     G_CALLBACK(on_size_allocate), app_data);
+    g_signal_connect(window, "delete-event",
+                     G_CALLBACK(on_delete_event), app_data);
+    g_signal_connect_swapped(window, "destroy",
+                             G_CALLBACK(g_free), app_data);
 }
 
 int main(int argc, char **argv) {

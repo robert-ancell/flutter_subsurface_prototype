@@ -2,6 +2,7 @@
 
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
+#include <gtk/gtk.h>
 #include <math.h>
 
 struct _Renderer {
@@ -28,6 +29,11 @@ struct _Renderer {
     GMutex    mutex;
     GCond     cond;
     gboolean  running;
+
+    /* Pending resize, protected by mutex */
+    gboolean resize_pending;
+    size_t   pending_width;
+    size_t   pending_height;
 };
 
 /* ── GL helpers ───────────────────────────────────────────────────────────── */
@@ -47,6 +53,35 @@ static GLuint compile_shader(GLenum type, const char *src) {
         return 0;
     }
     return sh;
+}
+
+/* (Re)create the FBO and backing texture at r->width × r->height.
+   Any existing texture and FBO are deleted first. */
+static gboolean create_fbo(Renderer *r) {
+    if (r->fbo)     { glDeleteFramebuffers(1, &r->fbo);  r->fbo     = 0; }
+    if (r->texture) { glDeleteTextures    (1, &r->texture); r->texture = 0; }
+
+    glGenTextures(1, &r->texture);
+    glBindTexture(GL_TEXTURE_2D, r->texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
+                 (GLsizei)r->width, (GLsizei)r->height,
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glGenFramebuffers(1, &r->fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, r->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, r->texture, 0);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        g_warning("Renderer FBO incomplete (status 0x%x)", (unsigned)status);
+        return FALSE;
+    }
+    return TRUE;
 }
 
 static gboolean setup_gl(Renderer *r) {
@@ -112,30 +147,7 @@ static gboolean setup_gl(Renderer *r) {
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-    /* Texture that will be shared with the widget's EGL context */
-    glGenTextures(1, &r->texture);
-    glBindTexture(GL_TEXTURE_2D, r->texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
-                 (GLsizei)r->width, (GLsizei)r->height,
-                 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    /* FBO with the texture as the colour attachment */
-    glGenFramebuffers(1, &r->fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, r->fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, r->texture, 0);
-    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-    if (status != GL_FRAMEBUFFER_COMPLETE) {
-        g_warning("Renderer FBO incomplete (status 0x%x)", (unsigned)status);
-        return FALSE;
-    }
-
-    return TRUE;
+    return create_fbo(r);
 }
 
 static void teardown_gl(Renderer *r) {
@@ -197,11 +209,23 @@ static gpointer renderer_thread_func(gpointer data) {
 
         g_mutex_lock(&r->mutex);
         g_cond_wait_until(&r->cond, &r->mutex, deadline);
-        gboolean running = r->running;
+        gboolean running        = r->running;
+        gboolean resize_pending = r->resize_pending;
+        size_t   new_width      = r->pending_width;
+        size_t   new_height     = r->pending_height;
+        if (resize_pending)
+            r->resize_pending = FALSE;
         g_mutex_unlock(&r->mutex);
 
         if (!running)
             break;
+
+        if (resize_pending && new_width > 0 && new_height > 0 &&
+            (new_width != r->width || new_height != r->height)) {
+            r->width  = new_width;
+            r->height = new_height;
+            create_fbo(r);
+        }
 
         float elapsed = (float)(g_get_monotonic_time() - start) / (float)G_USEC_PER_SEC;
         float angle   = elapsed * ((float)G_PI * 2.0f / 4.0f); /* one rotation per 4 s */
@@ -219,7 +243,7 @@ static gpointer renderer_thread_func(gpointer data) {
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
-Renderer *renderer_new(SubsurfaceWidget *widget, size_t width, size_t height) {
+Renderer *renderer_new(SubsurfaceWidget *widget) {
     EGLDisplay egl_display   = subsurface_widget_get_egl_display(widget);
     EGLContext share_context = subsurface_widget_get_egl_context(widget);
 
@@ -272,13 +296,16 @@ Renderer *renderer_new(SubsurfaceWidget *widget, size_t width, size_t height) {
         return NULL;
     }
 
+    GtkAllocation alloc;
+    gtk_widget_get_allocation(GTK_WIDGET(widget), &alloc);
+
     Renderer *r = g_new0(Renderer, 1);
     r->widget      = widget;
     r->egl_display = egl_display;
     r->egl_context = egl_context;
     r->egl_surface = egl_surface;
-    r->width       = width;
-    r->height      = height;
+    r->width       = (size_t)alloc.width;
+    r->height      = (size_t)alloc.height;
     r->running     = TRUE;
     g_mutex_init(&r->mutex);
     g_cond_init(&r->cond);
@@ -310,4 +337,12 @@ void renderer_free(Renderer *r) {
     g_mutex_clear(&r->mutex);
     g_cond_clear(&r->cond);
     g_free(r);
+}
+
+void renderer_resize(Renderer *r, size_t width, size_t height) {
+    g_mutex_lock(&r->mutex);
+    r->pending_width  = width;
+    r->pending_height = height;
+    r->resize_pending = TRUE;
+    g_mutex_unlock(&r->mutex);
 }

@@ -7,17 +7,27 @@ typedef struct _Renderer Renderer;
 /**
  * renderer_new:
  * @widget: the subsurface widget to present frames into
- * @width: render width in pixels
- * @height: render height in pixels
  *
  * Creates a renderer that runs on its own thread.  The renderer owns an
  * EGL context that shares objects with @widget's context, renders a
  * rotating RGB triangle into an FBO-backed texture, and calls
- * subsurface_widget_present() every 10 ms.
+ * subsurface_widget_present() every 10 ms.  The initial render size is
+ * taken from @widget's current allocation.
  *
  * Returns: a new #Renderer, or %NULL on failure.
  */
-Renderer *renderer_new(SubsurfaceWidget *widget, size_t width, size_t height);
+Renderer *renderer_new(SubsurfaceWidget *widget);
+
+/**
+ * renderer_resize:
+ * @renderer: the renderer
+ * @width: new render width in pixels
+ * @height: new render height in pixels
+ *
+ * Schedules a resize of the render target.  Safe to call from any thread,
+ * including the GTK main thread from a size-allocate handler.
+ */
+void renderer_resize(Renderer *renderer, size_t width, size_t height);
 
 /**
  * renderer_free:
