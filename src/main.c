@@ -40,7 +40,7 @@ static void activate(GtkApplication *app, gpointer user_data G_GNUC_UNUSED) {
     /* Widget is realized after show_all; create the renderer now that the
        widget's EGL context exists. */
     AppData *app_data  = g_new0(AppData, 1);
-    app_data->renderer = renderer_new(FLUTTER_SUBSURFACE_VIEW(widget));
+    app_data->renderer = renderer_new(FLUTTER_VIEW(widget));
 
     g_signal_connect(widget, "size-allocate",
                      G_CALLBACK(on_size_allocate), app_data);

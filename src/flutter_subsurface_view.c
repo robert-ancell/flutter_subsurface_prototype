@@ -20,6 +20,10 @@ struct _FlutterSubsurfaceView {
     EGLContext            egl_context;
     EGLSurface            egl_surface;
 
+    /* Shared context + 1×1 pbuffer for the renderer thread */
+    EGLContext renderer_egl_context;
+    EGLSurface renderer_egl_surface;
+
     /* GL resources for the texture blit */
     GLuint gl_program;
     GLuint gl_vbo;
@@ -169,7 +173,7 @@ static gboolean setup_egl(FlutterSubsurfaceView *self, struct wl_display *displa
     }
 
     static const EGLint config_attribs[] = {
-        EGL_SURFACE_TYPE,    EGL_WINDOW_BIT,
+        EGL_SURFACE_TYPE,    EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
         EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
         EGL_RED_SIZE,        8,
         EGL_GREEN_SIZE,      8,
@@ -195,6 +199,28 @@ static gboolean setup_egl(FlutterSubsurfaceView *self, struct wl_display *displa
                                          EGL_NO_CONTEXT, context_attribs);
     if (self->egl_context == EGL_NO_CONTEXT) {
         g_warning("Failed to create EGL context");
+        return FALSE;
+    }
+
+    /* Create a renderer context sharing objects with the main context, plus a
+       1×1 pbuffer to keep it current on the renderer thread. */
+    self->renderer_egl_context = eglCreateContext(self->egl_display, config,
+                                                   self->egl_context, context_attribs);
+    if (self->renderer_egl_context == EGL_NO_CONTEXT) {
+        g_warning("Failed to create renderer EGL context");
+        return FALSE;
+    }
+    static const EGLint pbuffer_attribs[] = {
+        EGL_WIDTH,  1,
+        EGL_HEIGHT, 1,
+        EGL_NONE,
+    };
+    self->renderer_egl_surface = eglCreatePbufferSurface(self->egl_display, config,
+                                                          pbuffer_attribs);
+    if (self->renderer_egl_surface == EGL_NO_SURFACE) {
+        g_warning("Failed to create renderer EGL pbuffer surface");
+        eglDestroyContext(self->egl_display, self->renderer_egl_context);
+        self->renderer_egl_context = EGL_NO_CONTEXT;
         return FALSE;
     }
 
@@ -325,11 +351,17 @@ static void flutter_subsurface_view_unrealize(GtkWidget *widget) {
         teardown_gl(self);
         eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
                        EGL_NO_CONTEXT);
+        if (self->renderer_egl_surface != EGL_NO_SURFACE)
+            eglDestroySurface(self->egl_display, self->renderer_egl_surface);
+        if (self->renderer_egl_context != EGL_NO_CONTEXT)
+            eglDestroyContext(self->egl_display, self->renderer_egl_context);
         if (self->egl_surface != EGL_NO_SURFACE)
             eglDestroySurface(self->egl_display, self->egl_surface);
         if (self->egl_context != EGL_NO_CONTEXT)
             eglDestroyContext(self->egl_display, self->egl_context);
         eglTerminate(self->egl_display);
+        self->renderer_egl_surface = EGL_NO_SURFACE;
+        self->renderer_egl_context = EGL_NO_CONTEXT;
         self->egl_surface = EGL_NO_SURFACE;
         self->egl_context = EGL_NO_CONTEXT;
         self->egl_display = EGL_NO_DISPLAY;
@@ -420,9 +452,11 @@ static void flutter_subsurface_view_class_init(FlutterSubsurfaceViewClass *klass
 
 static void flutter_subsurface_view_init(FlutterSubsurfaceView *self) {
     gtk_widget_set_has_window(GTK_WIDGET(self), FALSE);
-    self->egl_display = EGL_NO_DISPLAY;
-    self->egl_context = EGL_NO_CONTEXT;
-    self->egl_surface = EGL_NO_SURFACE;
+    self->egl_display          = EGL_NO_DISPLAY;
+    self->egl_context          = EGL_NO_CONTEXT;
+    self->egl_surface          = EGL_NO_SURFACE;
+    self->renderer_egl_context = EGL_NO_CONTEXT;
+    self->renderer_egl_surface = EGL_NO_SURFACE;
     g_mutex_init(&self->present_mutex);
 }
 
@@ -553,8 +587,9 @@ subsurface_view_iface_present(FlutterView *view, GLuint texture_id,
 
 static gboolean subsurface_view_iface_make_current(FlutterView *view) {
     FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(view);
-    return eglMakeCurrent(self->egl_display, self->egl_surface,
-                          self->egl_surface, self->egl_context) == EGL_TRUE;
+    return eglMakeCurrent(self->egl_display, self->renderer_egl_surface,
+                          self->renderer_egl_surface,
+                          self->renderer_egl_context) == EGL_TRUE;
 }
 
 static void subsurface_view_iface_clear_current(FlutterView *view) {

@@ -1,16 +1,11 @@
 #include "renderer.h"
 
-#include <EGL/egl.h>
 #include <GLES2/gl2.h>
 #include <gtk/gtk.h>
 #include <math.h>
 
 struct _Renderer {
-    FlutterSubsurfaceView *widget;
-
-    EGLDisplay egl_display;
-    EGLContext egl_context;
-    EGLSurface egl_surface; /* 1×1 pbuffer — keeps the context current */
+    FlutterView *widget;
 
     size_t width;
     size_t height;
@@ -190,8 +185,10 @@ static void render_frame(Renderer *r, float angle) {
 static gpointer renderer_thread_func(gpointer data) {
     Renderer *r = data;
 
-    eglMakeCurrent(r->egl_display, r->egl_surface, r->egl_surface,
-                   r->egl_context);
+    if (!flutter_view_make_current(r->widget)) {
+        g_warning("Renderer: flutter_view_make_current failed, thread exiting");
+        return NULL;
+    }
 
     if (!setup_gl(r)) {
         g_warning("Renderer: GL setup failed, thread exiting");
@@ -235,77 +232,21 @@ static gpointer renderer_thread_func(gpointer data) {
     }
 
     teardown_gl(r);
-    eglMakeCurrent(r->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
-                   EGL_NO_CONTEXT);
+    flutter_view_clear_current(r->widget);
     return NULL;
 }
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
-Renderer *renderer_new(FlutterSubsurfaceView *widget) {
-    EGLDisplay egl_display   = flutter_subsurface_view_get_egl_display(widget);
-    EGLContext share_context = flutter_subsurface_view_get_egl_context(widget);
-
-    if (egl_display == EGL_NO_DISPLAY || share_context == EGL_NO_CONTEXT) {
-        g_warning("Renderer: widget has no EGL context (not on Wayland?)");
-        return NULL;
-    }
-
-    /* Choose a config that supports pbuffer surfaces for the offscreen
-       render surface used to keep the context current on this thread. */
-    static const EGLint config_attribs[] = {
-        EGL_SURFACE_TYPE,    EGL_PBUFFER_BIT,
-        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-        EGL_RED_SIZE,        8,
-        EGL_GREEN_SIZE,      8,
-        EGL_BLUE_SIZE,       8,
-        EGL_ALPHA_SIZE,      8,
-        EGL_NONE,
-    };
-    EGLConfig config;
-    EGLint    num_configs;
-    eglBindAPI(EGL_OPENGL_ES_API);
-    if (!eglChooseConfig(egl_display, config_attribs, &config, 1,
-                         &num_configs) || num_configs == 0) {
-        g_warning("Renderer: failed to choose EGL config");
-        return NULL;
-    }
-
-    static const EGLint context_attribs[] = {
-        EGL_CONTEXT_CLIENT_VERSION, 2,
-        EGL_NONE,
-    };
-    EGLContext egl_context = eglCreateContext(egl_display, config,
-                                              share_context, context_attribs);
-    if (egl_context == EGL_NO_CONTEXT) {
-        g_warning("Renderer: failed to create EGL context");
-        return NULL;
-    }
-
-    static const EGLint pbuffer_attribs[] = {
-        EGL_WIDTH,  1,
-        EGL_HEIGHT, 1,
-        EGL_NONE,
-    };
-    EGLSurface egl_surface = eglCreatePbufferSurface(egl_display, config,
-                                                     pbuffer_attribs);
-    if (egl_surface == EGL_NO_SURFACE) {
-        g_warning("Renderer: failed to create EGL pbuffer surface");
-        eglDestroyContext(egl_display, egl_context);
-        return NULL;
-    }
-
+Renderer *renderer_new(FlutterView *widget) {
     GtkAllocation alloc;
     gtk_widget_get_allocation(GTK_WIDGET(widget), &alloc);
 
     Renderer *r = g_new0(Renderer, 1);
-    r->widget      = widget;
-    r->egl_display = egl_display;
-    r->egl_context = egl_context;
-    r->egl_surface = egl_surface;
-    r->width       = (size_t)alloc.width;
-    r->height      = (size_t)alloc.height;
-    r->running     = TRUE;
+    r->widget  = widget;
+    r->width   = (size_t)alloc.width;
+    r->height  = (size_t)alloc.height;
+    r->running = TRUE;
     g_mutex_init(&r->mutex);
     g_cond_init(&r->cond);
 
@@ -325,13 +266,6 @@ void renderer_free(Renderer *r) {
     g_mutex_unlock(&r->mutex);
 
     g_thread_join(r->thread);
-
-    /* The thread has already done eglMakeCurrent(NO_CONTEXT), so it is safe
-       to destroy the EGL objects from this thread. */
-    if (r->egl_surface != EGL_NO_SURFACE)
-        eglDestroySurface(r->egl_display, r->egl_surface);
-    if (r->egl_context != EGL_NO_CONTEXT)
-        eglDestroyContext(r->egl_display, r->egl_context);
 
     g_mutex_clear(&r->mutex);
     g_cond_clear(&r->cond);

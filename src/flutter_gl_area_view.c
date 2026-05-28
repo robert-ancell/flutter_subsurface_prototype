@@ -9,6 +9,10 @@ struct _FlutterGLAreaView {
     EGLDisplay egl_display;
     EGLContext egl_context;
 
+    /* Shared context + 1×1 pbuffer for the renderer thread */
+    EGLContext renderer_egl_context;
+    EGLSurface renderer_egl_surface;
+
     /* GL resources for the texture blit */
     GLuint gl_program;
     GLuint gl_vbo;
@@ -163,6 +167,49 @@ static void flutter_gl_area_view_realize(GtkWidget *widget) {
     self->egl_display = eglGetCurrentDisplay();
     self->egl_context = eglGetCurrentContext();
 
+    /* Create a renderer context sharing objects with the GDK context, plus
+       a 1×1 pbuffer to keep it current on the renderer thread. */
+    static const EGLint renderer_config_attribs[] = {
+        EGL_SURFACE_TYPE,    EGL_PBUFFER_BIT,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+        EGL_RED_SIZE,        8,
+        EGL_GREEN_SIZE,      8,
+        EGL_BLUE_SIZE,       8,
+        EGL_ALPHA_SIZE,      8,
+        EGL_NONE,
+    };
+    static const EGLint renderer_context_attribs[] = {
+        EGL_CONTEXT_CLIENT_VERSION, 2,
+        EGL_NONE,
+    };
+    static const EGLint pbuffer_attribs[] = {
+        EGL_WIDTH,  1,
+        EGL_HEIGHT, 1,
+        EGL_NONE,
+    };
+    EGLConfig renderer_config;
+    EGLint    num_configs;
+    eglBindAPI(EGL_OPENGL_ES_API);
+    if (eglChooseConfig(self->egl_display, renderer_config_attribs,
+                        &renderer_config, 1, &num_configs) && num_configs > 0) {
+        self->renderer_egl_context = eglCreateContext(
+            self->egl_display, renderer_config, self->egl_context,
+            renderer_context_attribs);
+        if (self->renderer_egl_context != EGL_NO_CONTEXT) {
+            self->renderer_egl_surface = eglCreatePbufferSurface(
+                self->egl_display, renderer_config, pbuffer_attribs);
+            if (self->renderer_egl_surface == EGL_NO_SURFACE) {
+                g_warning("FlutterGLAreaView: failed to create renderer EGL pbuffer");
+                eglDestroyContext(self->egl_display, self->renderer_egl_context);
+                self->renderer_egl_context = EGL_NO_CONTEXT;
+            }
+        } else {
+            g_warning("FlutterGLAreaView: failed to create renderer EGL context");
+        }
+    } else {
+        g_warning("FlutterGLAreaView: failed to choose EGL config for renderer");
+    }
+
     setup_gl(self);
 }
 
@@ -172,6 +219,15 @@ static void flutter_gl_area_view_unrealize(GtkWidget *widget) {
     gtk_gl_area_make_current(GTK_GL_AREA(widget));
     if (gtk_gl_area_get_error(GTK_GL_AREA(widget)) == NULL)
         teardown_gl(self);
+
+    if (self->renderer_egl_surface != EGL_NO_SURFACE) {
+        eglDestroySurface(self->egl_display, self->renderer_egl_surface);
+        self->renderer_egl_surface = EGL_NO_SURFACE;
+    }
+    if (self->renderer_egl_context != EGL_NO_CONTEXT) {
+        eglDestroyContext(self->egl_display, self->renderer_egl_context);
+        self->renderer_egl_context = EGL_NO_CONTEXT;
+    }
 
     self->egl_display = EGL_NO_DISPLAY;
     self->egl_context = EGL_NO_CONTEXT;
@@ -221,8 +277,10 @@ static void flutter_gl_area_view_class_init(FlutterGLAreaViewClass *klass) {
 }
 
 static void flutter_gl_area_view_init(FlutterGLAreaView *self) {
-    self->egl_display = EGL_NO_DISPLAY;
-    self->egl_context = EGL_NO_CONTEXT;
+    self->egl_display          = EGL_NO_DISPLAY;
+    self->egl_context          = EGL_NO_CONTEXT;
+    self->renderer_egl_context = EGL_NO_CONTEXT;
+    self->renderer_egl_surface = EGL_NO_SURFACE;
     g_mutex_init(&self->present_mutex);
 
     /* Request an OpenGL ES 2 context so the shaders and the renderer's
@@ -337,8 +395,9 @@ gl_area_view_iface_present(FlutterView *view, GLuint texture_id,
 
 static gboolean gl_area_view_iface_make_current(FlutterView *view) {
     FlutterGLAreaView *self = FLUTTER_GL_AREA_VIEW(view);
-    return eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
-                          self->egl_context) == EGL_TRUE;
+    return eglMakeCurrent(self->egl_display, self->renderer_egl_surface,
+                          self->renderer_egl_surface,
+                          self->renderer_egl_context) == EGL_TRUE;
 }
 
 static void gl_area_view_iface_clear_current(FlutterView *view) {
