@@ -1,7 +1,9 @@
 #include "flutter_gl_area_view.h"
 
 #include <EGL/egl.h>
+#include <EGL/eglext.h>
 #include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
 
 struct _FlutterGLAreaView {
     GtkGLArea parent_instance;
@@ -9,24 +11,30 @@ struct _FlutterGLAreaView {
     EGLDisplay egl_display;
     EGLContext egl_context;
 
-    /* Shared context + 1×1 pbuffer for the renderer thread */
+    /* Independent renderer context + 1×1 pbuffer (no sharing with GDK). */
     EGLContext renderer_egl_context;
     EGLSurface renderer_egl_surface;
 
-    /* GL resources for the texture blit */
+    /* EGL image extension function pointers, loaded at realize time. */
+    PFNEGLCREATEIMAGEKHRPROC            p_egl_create_image;
+    PFNEGLDESTROYIMAGEKHRPROC           p_egl_destroy_image;
+    PFNGLEGLIMAGETARGETTEXTURE2DOESPROC p_gl_egl_image_target_tex;
+
+    /* GL resources for the texture blit (in GDK's context) */
     GLuint gl_program;
     GLuint gl_vbo;
     GLint  gl_position_loc;
     GLint  gl_texture_loc;
 
+    /* Display texture in GDK's context, kept in sync via EGL image. */
+    GLuint      display_texture;
+    EGLImageKHR display_egl_image; /* EGL image currently bound to display_texture */
+
     /* Thread-safe pending-present state */
-    GMutex   present_mutex;
-    gboolean present_scheduled; /* a queue_render has been dispatched */
-    gboolean has_frame;         /* render vfunc has something to blit */
-    GLuint   present_texture_id;
-    GLenum   present_texture_format;
-    size_t   present_width;
-    size_t   present_height;
+    GMutex      present_mutex;
+    gboolean    present_scheduled;
+    gboolean    has_frame;
+    EGLImageKHR pending_egl_image; /* under present_mutex */
 };
 
 static void flutter_gl_area_view_iface_init(FlutterViewInterface *iface);
@@ -167,8 +175,26 @@ static void flutter_gl_area_view_realize(GtkWidget *widget) {
     self->egl_display = eglGetCurrentDisplay();
     self->egl_context = eglGetCurrentContext();
 
-    /* Create a renderer context sharing objects with the GDK context, plus
-       a 1×1 pbuffer to keep it current on the renderer thread. */
+    /* Load EGL image extension function pointers.  These allow textures
+       created in the renderer context to be imported into GDK's context
+       without the two contexts sharing a share-group (which would race
+       inside Mesa's internal worker threads and crash). */
+    self->p_egl_create_image = (PFNEGLCREATEIMAGEKHRPROC)
+        eglGetProcAddress("eglCreateImageKHR");
+    self->p_egl_destroy_image = (PFNEGLDESTROYIMAGEKHRPROC)
+        eglGetProcAddress("eglDestroyImageKHR");
+    self->p_gl_egl_image_target_tex = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)
+        eglGetProcAddress("glEGLImageTargetTexture2DOES");
+    if (!self->p_egl_create_image || !self->p_egl_destroy_image ||
+        !self->p_gl_egl_image_target_tex) {
+        g_warning("FlutterGLAreaView: EGL image extensions not available; "
+                  "--glarea will not render");
+    }
+
+    /* Create an independent renderer context (EGL_NO_CONTEXT — no sharing)
+       plus a 1×1 pbuffer to keep it current on the renderer thread.
+       NOT sharing with GDK avoids the Mesa gallium internal-thread crash
+       that occurs when a shared context is used concurrently from two threads. */
     static const EGLint renderer_config_attribs[] = {
         EGL_SURFACE_TYPE,    EGL_PBUFFER_BIT,
         EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
@@ -193,7 +219,7 @@ static void flutter_gl_area_view_realize(GtkWidget *widget) {
     if (eglChooseConfig(self->egl_display, renderer_config_attribs,
                         &renderer_config, 1, &num_configs) && num_configs > 0) {
         self->renderer_egl_context = eglCreateContext(
-            self->egl_display, renderer_config, self->egl_context,
+            self->egl_display, renderer_config, EGL_NO_CONTEXT,
             renderer_context_attribs);
         if (self->renderer_egl_context != EGL_NO_CONTEXT) {
             self->renderer_egl_surface = eglCreatePbufferSurface(
@@ -217,8 +243,26 @@ static void flutter_gl_area_view_unrealize(GtkWidget *widget) {
     FlutterGLAreaView *self = FLUTTER_GL_AREA_VIEW(widget);
 
     gtk_gl_area_make_current(GTK_GL_AREA(widget));
-    if (gtk_gl_area_get_error(GTK_GL_AREA(widget)) == NULL)
+    if (gtk_gl_area_get_error(GTK_GL_AREA(widget)) == NULL) {
         teardown_gl(self);
+        if (self->display_texture) {
+            glDeleteTextures(1, &self->display_texture);
+            self->display_texture = 0;
+        }
+    }
+
+    if (self->display_egl_image != EGL_NO_IMAGE_KHR) {
+        self->p_egl_destroy_image(self->egl_display, self->display_egl_image);
+        self->display_egl_image = EGL_NO_IMAGE_KHR;
+    }
+
+    g_mutex_lock(&self->present_mutex);
+    if (self->pending_egl_image != EGL_NO_IMAGE_KHR) {
+        self->p_egl_destroy_image(self->egl_display, self->pending_egl_image);
+        self->pending_egl_image = EGL_NO_IMAGE_KHR;
+    }
+    self->has_frame = FALSE;
+    g_mutex_unlock(&self->present_mutex);
 
     if (self->renderer_egl_surface != EGL_NO_SURFACE) {
         eglDestroySurface(self->egl_display, self->renderer_egl_surface);
@@ -236,8 +280,8 @@ static void flutter_gl_area_view_unrealize(GtkWidget *widget) {
 }
 
 /* render vfunc — called by GtkGLArea with the correct FBO bound and the
-   GL context already current.  Blits the latest pending frame if one is
-   available, otherwise clears to opaque black. */
+   GL context already current.  Imports the latest EGL image from the
+   renderer thread into display_texture, then blits it. */
 static gboolean flutter_gl_area_view_render(GtkGLArea    *area,
                                              GdkGLContext *context G_GNUC_UNUSED) {
     FlutterGLAreaView *self = FLUTTER_GL_AREA_VIEW(area);
@@ -250,12 +294,29 @@ static gboolean flutter_gl_area_view_render(GtkGLArea    *area,
         return TRUE;
     }
 
-    GLuint texture_id     = self->present_texture_id;
-    GLenum texture_format = self->present_texture_format;
+    EGLImageKHR new_image = self->pending_egl_image;
+    self->pending_egl_image = EGL_NO_IMAGE_KHR;
     self->has_frame = FALSE;
     g_mutex_unlock(&self->present_mutex);
 
-    blit_texture(self, texture_id, texture_format);
+    /* Create the display texture on first use. */
+    if (self->display_texture == 0)
+        glGenTextures(1, &self->display_texture);
+
+    /* Bind the EGL image to the display texture.  This replaces whatever
+       the texture previously referred to, so display_egl_image (which kept
+       the previous frame alive) can now be destroyed. */
+    glBindTexture(GL_TEXTURE_2D, self->display_texture);
+    self->p_gl_egl_image_target_tex(GL_TEXTURE_2D, (GLeglImageOES)new_image);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    if (self->display_egl_image != EGL_NO_IMAGE_KHR)
+        self->p_egl_destroy_image(self->egl_display, self->display_egl_image);
+    self->display_egl_image = new_image;
+
+    blit_texture(self, self->display_texture, GL_RGBA);
     return TRUE;
 }
 
@@ -281,6 +342,8 @@ static void flutter_gl_area_view_init(FlutterGLAreaView *self) {
     self->egl_context          = EGL_NO_CONTEXT;
     self->renderer_egl_context = EGL_NO_CONTEXT;
     self->renderer_egl_surface = EGL_NO_SURFACE;
+    self->display_egl_image    = EGL_NO_IMAGE_KHR;
+    self->pending_egl_image    = EGL_NO_IMAGE_KHR;
     g_mutex_init(&self->present_mutex);
 
     /* Request an OpenGL ES 2 context so the shaders and the renderer's
@@ -319,17 +382,33 @@ static gboolean do_queue_render(gpointer data) {
 }
 
 static void flutter_gl_area_view_present(FlutterGLAreaView *self,
-                                   GLuint             texture_id,
-                                   GLenum             texture_format,
-                                   size_t             width,
-                                   size_t             height) {
+                                          GLuint             texture_id,
+                                          GLenum             texture_format G_GNUC_UNUSED,
+                                          size_t             width G_GNUC_UNUSED,
+                                          size_t             height G_GNUC_UNUSED) {
+    if (!self->p_egl_create_image)
+        return;
+
+    /* Create an EGL image from the renderer's texture while the renderer
+       context is current.  This allows GDK's context to import the texture
+       data via glEGLImageTargetTexture2DOES without the two contexts needing
+       to share a share-group (which crashes Mesa's gallium worker threads). */
+    EGLImageKHR new_image = self->p_egl_create_image(
+        self->egl_display, self->renderer_egl_context,
+        EGL_GL_TEXTURE_2D_KHR, (EGLClientBuffer)(uintptr_t)texture_id, NULL);
+
     g_mutex_lock(&self->present_mutex);
 
-    self->present_texture_id     = texture_id;
-    self->present_texture_format = texture_format;
-    self->present_width          = width;
-    self->present_height         = height;
-    self->has_frame              = TRUE;
+    /* Discard any unconsumed frame from a previous present call. */
+    if (self->pending_egl_image != EGL_NO_IMAGE_KHR) {
+        self->p_egl_destroy_image(self->egl_display, self->pending_egl_image);
+        self->pending_egl_image = EGL_NO_IMAGE_KHR;
+    }
+
+    if (new_image != EGL_NO_IMAGE_KHR) {
+        self->pending_egl_image = new_image;
+        self->has_frame = TRUE;
+    }
 
     gboolean was_scheduled = self->present_scheduled;
     if (!was_scheduled) {
