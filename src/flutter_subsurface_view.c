@@ -551,8 +551,22 @@ subsurface_view_iface_present(FlutterView *view, GLuint texture_id,
                                     texture_id, texture_format, width, height);
 }
 
+static gboolean subsurface_view_iface_make_current(FlutterView *view) {
+    FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(view);
+    return eglMakeCurrent(self->egl_display, self->egl_surface,
+                          self->egl_surface, self->egl_context) == EGL_TRUE;
+}
+
+static void subsurface_view_iface_clear_current(FlutterView *view) {
+    FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(view);
+    eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                   EGL_NO_CONTEXT);
+}
+
 static void flutter_subsurface_view_iface_init(FlutterViewInterface *iface) {
     iface->create_backing_store  = subsurface_view_iface_create_backing_store;
     iface->collect_backing_store = subsurface_view_iface_collect_backing_store;
     iface->present               = subsurface_view_iface_present;
+    iface->make_current          = subsurface_view_iface_make_current;
+    iface->clear_current         = subsurface_view_iface_clear_current;
 }

@@ -31,3 +31,17 @@ void flutter_view_present(FlutterView *self,
     g_return_if_fail(iface->present != NULL);
     iface->present(self, texture_id, texture_format, width, height);
 }
+
+gboolean flutter_view_make_current(FlutterView *self) {
+    g_return_val_if_fail(FLUTTER_IS_VIEW(self), FALSE);
+    FlutterViewInterface *iface = FLUTTER_VIEW_GET_IFACE(self);
+    g_return_val_if_fail(iface->make_current != NULL, FALSE);
+    return iface->make_current(self);
+}
+
+void flutter_view_clear_current(FlutterView *self) {
+    g_return_if_fail(FLUTTER_IS_VIEW(self));
+    FlutterViewInterface *iface = FLUTTER_VIEW_GET_IFACE(self);
+    g_return_if_fail(iface->clear_current != NULL);
+    iface->clear_current(self);
+}

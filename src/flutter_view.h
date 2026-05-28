@@ -36,6 +36,9 @@ struct _FlutterViewInterface {
                     GLenum       texture_format,
                     size_t       width,
                     size_t       height);
+
+    gboolean (*make_current)(FlutterView *self);
+    void     (*clear_current)(FlutterView *self);
 };
 
 FlutterBackingStore *flutter_view_create_backing_store(FlutterView *self,
@@ -50,5 +53,8 @@ void flutter_view_present(FlutterView *self,
                           GLenum       texture_format,
                           size_t       width,
                           size_t       height);
+
+gboolean flutter_view_make_current(FlutterView *self);
+void     flutter_view_clear_current(FlutterView *self);
 
 G_END_DECLS
