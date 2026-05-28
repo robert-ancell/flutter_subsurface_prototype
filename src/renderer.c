@@ -43,9 +43,9 @@ static GLuint compile_shader(GLenum type, const char *src) {
     glShaderSource(sh, 1, &src, NULL);
     glCompileShader(sh);
 
-    GLint ok;
-    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
+    GLint compile_status;
+    glGetShaderiv(sh, GL_COMPILE_STATUS, &compile_status);
+    if (compile_status == GL_FALSE) {
         char log[512];
         glGetShaderInfoLog(sh, sizeof(log), NULL, log);
         g_warning("Renderer shader compile error: %s", log);
