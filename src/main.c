@@ -70,9 +70,12 @@ static void activate(GtkApplication *app, gpointer user_data G_GNUC_UNUSED) {
 
     AppData *app_data = g_new0(AppData, 1);
 
-    GtkWidget *widget = opt_glarea
-        ? flutter_gl_view_new()
-        : flutter_subsurface_view_new(on_subsurface_resize, app_data);
+    GtkWidget *widget;
+    if (opt_glarea)
+        widget = flutter_gl_view_new();
+    else
+        widget = flutter_subsurface_view_new(opt_subsurface,
+                                             on_subsurface_resize, app_data);
     gtk_container_add(GTK_CONTAINER(window), widget);
 
     gtk_widget_show_all(window);
@@ -81,8 +84,8 @@ static void activate(GtkApplication *app, gpointer user_data G_GNUC_UNUSED) {
        widget's EGL context exists. */
     app_data->renderer = renderer_new(FLUTTER_VIEW(widget));
 
-    /* For GL view mode, resize is handled externally via signal. */
-    if (!FLUTTER_IS_SUBSURFACE_VIEW(widget))
+    /* For FlutterGLView, resize is handled externally via signal. */
+    if (opt_glarea)
         g_signal_connect(widget, "size-allocate",
                          G_CALLBACK(on_size_allocate), app_data);
 

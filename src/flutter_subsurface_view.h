@@ -20,9 +20,10 @@ typedef void (*FlutterSubsurfaceViewResizeFunc)(size_t   width,
 
 #define FLUTTER_SUBSURFACE_VIEW_TYPE (flutter_subsurface_view_get_type())
 G_DECLARE_FINAL_TYPE(FlutterSubsurfaceView, flutter_subsurface_view,
-                     FLUTTER, SUBSURFACE_VIEW, GtkWidget)
+                     FLUTTER, SUBSURFACE_VIEW, GtkDrawingArea)
 
-GtkWidget  *flutter_subsurface_view_new(FlutterSubsurfaceViewResizeFunc resize_func,
+GtkWidget  *flutter_subsurface_view_new(gboolean                        use_subsurface,
+                                        FlutterSubsurfaceViewResizeFunc resize_func,
                                         gpointer                        resize_data);
 
 EGLDisplay  flutter_subsurface_view_get_egl_display(FlutterSubsurfaceView *self);

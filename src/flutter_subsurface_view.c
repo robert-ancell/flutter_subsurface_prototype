@@ -21,11 +21,14 @@ typedef void (GL_APIENTRY *PFNGLBLITFRAMEBUFFERPROC)(
     GLbitfield mask, GLenum filter);
 
 struct _FlutterSubsurfaceView {
-    GtkWidget parent_instance;
+    GtkDrawingArea parent_instance;
 
+    gboolean use_subsurface;
     gint scale;
     FlutterSubsurfaceViewResizeFunc resize_func;
     gpointer                        resize_data;
+
+    /* ── Wayland subsurface mode fields ──────────────────────────────────── */
 
     struct wl_compositor    *compositor;
     struct wl_subcompositor *subcompositor;
@@ -36,10 +39,6 @@ struct _FlutterSubsurfaceView {
     EGLDisplay            egl_display;
     EGLContext            egl_context;
     EGLSurface            egl_surface;
-
-    /* Shared context + 1×1 pbuffer for the renderer thread */
-    EGLContext renderer_egl_context;
-    EGLSurface renderer_egl_surface;
 
     /* GL resources for the texture blit (shader fallback) */
     GLuint gl_program;
@@ -58,11 +57,29 @@ struct _FlutterSubsurfaceView {
     gboolean resize_done;
     size_t   resize_expected_width;
     size_t   resize_expected_height;
+
+    /* ── gdk_cairo_draw_from_gl mode fields ──────────────────────────────── */
+
+    GdkGLContext *gdk_gl_context;
+
+    /* Thread-safe pending-present state (non-subsurface path) */
+    GMutex   present_mutex;
+    gboolean present_scheduled;
+    gboolean has_frame;
+    GLuint   present_texture;
+    size_t   present_width;
+    size_t   present_height;
+
+    /* ── Shared ──────────────────────────────────────────────────────────── */
+
+    /* Shared context + 1×1 pbuffer for the renderer thread */
+    EGLContext renderer_egl_context;
+    EGLSurface renderer_egl_surface;
 };
 
 static void flutter_subsurface_view_iface_init(FlutterViewInterface *iface);
 
-G_DEFINE_TYPE_WITH_CODE(FlutterSubsurfaceView, flutter_subsurface_view, GTK_TYPE_WIDGET,
+G_DEFINE_TYPE_WITH_CODE(FlutterSubsurfaceView, flutter_subsurface_view, GTK_TYPE_DRAWING_AREA,
     G_IMPLEMENT_INTERFACE(FLUTTER_TYPE_VIEW, flutter_subsurface_view_iface_init))
 
 /* ── Wayland registry ─────────────────────────────────────────────────────── */
@@ -336,11 +353,7 @@ static void render_texture(FlutterSubsurfaceView *self,
 
 /* ── GtkWidget vfuncs ─────────────────────────────────────────────────────── */
 
-static void flutter_subsurface_view_realize(GtkWidget *widget) {
-    FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(widget);
-
-    GTK_WIDGET_CLASS(flutter_subsurface_view_parent_class)->realize(widget);
-
+static void realize_subsurface(FlutterSubsurfaceView *self, GtkWidget *widget) {
     GdkDisplay *gdk_display = gtk_widget_get_display(widget);
     if (!GDK_IS_WAYLAND_DISPLAY(gdk_display)) {
         g_warning("FlutterSubsurfaceView requires a Wayland display");
@@ -371,11 +384,6 @@ static void flutter_subsurface_view_realize(GtkWidget *widget) {
     self->subsurface = wl_subcompositor_get_subsurface(
         self->subcompositor, self->surface, parent_surface);
 
-    /* Sync mode: subsurface commits are cached and applied atomically when
-       the parent GTK window surface commits.  After each eglSwapBuffers we
-       call gtk_widget_queue_draw() to drive a GTK frame cycle, which causes
-       GDK to commit the parent surface and flush our pending subsurface
-       commit to the compositor. */
     wl_subsurface_set_sync(self->subsurface);
 
     gint x, y;
@@ -396,43 +404,145 @@ static void flutter_subsurface_view_realize(GtkWidget *widget) {
                    EGL_NO_CONTEXT);
 }
 
+static void realize_gl(FlutterSubsurfaceView *self, GtkWidget *widget) {
+    GdkWindow *gdk_window = gtk_widget_get_window(widget);
+
+    GError *error = NULL;
+    self->gdk_gl_context = gdk_window_create_gl_context(gdk_window, &error);
+    if (!self->gdk_gl_context) {
+        g_warning("FlutterSubsurfaceView: failed to create GDK GL context: %s",
+                  error->message);
+        g_error_free(error);
+        return;
+    }
+
+    gdk_gl_context_set_use_es(self->gdk_gl_context, TRUE);
+    gdk_gl_context_set_required_version(self->gdk_gl_context, 2, 0);
+
+    if (!gdk_gl_context_realize(self->gdk_gl_context, &error)) {
+        g_warning("FlutterSubsurfaceView: failed to realize GDK GL context: %s",
+                  error->message);
+        g_error_free(error);
+        g_clear_object(&self->gdk_gl_context);
+        return;
+    }
+
+    gdk_gl_context_make_current(self->gdk_gl_context);
+    self->egl_display = eglGetCurrentDisplay();
+    EGLContext gdk_egl_context = eglGetCurrentContext();
+
+    /* Create a renderer context that shares objects with GDK's context. */
+    static const EGLint config_attribs[] = {
+        EGL_SURFACE_TYPE,    EGL_PBUFFER_BIT,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+        EGL_RED_SIZE,        8,
+        EGL_GREEN_SIZE,      8,
+        EGL_BLUE_SIZE,       8,
+        EGL_ALPHA_SIZE,      8,
+        EGL_NONE,
+    };
+    static const EGLint context_attribs[] = {
+        EGL_CONTEXT_CLIENT_VERSION, 2,
+        EGL_NONE,
+    };
+    static const EGLint pbuffer_attribs[] = {
+        EGL_WIDTH,  1,
+        EGL_HEIGHT, 1,
+        EGL_NONE,
+    };
+
+    EGLConfig config;
+    EGLint    num_configs;
+    eglBindAPI(EGL_OPENGL_ES_API);
+    if (eglChooseConfig(self->egl_display, config_attribs,
+                        &config, 1, &num_configs) && num_configs > 0) {
+        self->renderer_egl_context = eglCreateContext(
+            self->egl_display, config, gdk_egl_context, context_attribs);
+        if (self->renderer_egl_context != EGL_NO_CONTEXT) {
+            self->renderer_egl_surface = eglCreatePbufferSurface(
+                self->egl_display, config, pbuffer_attribs);
+            if (self->renderer_egl_surface == EGL_NO_SURFACE) {
+                g_warning("FlutterSubsurfaceView: failed to create renderer pbuffer");
+                eglDestroyContext(self->egl_display, self->renderer_egl_context);
+                self->renderer_egl_context = EGL_NO_CONTEXT;
+            }
+        } else {
+            g_warning("FlutterSubsurfaceView: failed to create renderer EGL context");
+        }
+    } else {
+        g_warning("FlutterSubsurfaceView: failed to choose EGL config for renderer");
+    }
+
+    gdk_gl_context_clear_current();
+}
+
+static void flutter_subsurface_view_realize(GtkWidget *widget) {
+    FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(widget);
+
+    GTK_WIDGET_CLASS(flutter_subsurface_view_parent_class)->realize(widget);
+
+    if (self->use_subsurface)
+        realize_subsurface(self, widget);
+    else
+        realize_gl(self, widget);
+}
+
 static void flutter_subsurface_view_unrealize(GtkWidget *widget) {
     FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(widget);
 
-    if (self->egl_display != EGL_NO_DISPLAY) {
-        eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
-                       self->egl_context);
-        teardown_gl(self);
-        eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
-                       EGL_NO_CONTEXT);
-        if (self->renderer_egl_surface != EGL_NO_SURFACE)
+    if (self->use_subsurface) {
+        if (self->egl_display != EGL_NO_DISPLAY) {
+            eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
+                           self->egl_context);
+            teardown_gl(self);
+            eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                           EGL_NO_CONTEXT);
+            if (self->renderer_egl_surface != EGL_NO_SURFACE)
+                eglDestroySurface(self->egl_display, self->renderer_egl_surface);
+            if (self->renderer_egl_context != EGL_NO_CONTEXT)
+                eglDestroyContext(self->egl_display, self->renderer_egl_context);
+            if (self->egl_surface != EGL_NO_SURFACE)
+                eglDestroySurface(self->egl_display, self->egl_surface);
+            if (self->egl_context != EGL_NO_CONTEXT)
+                eglDestroyContext(self->egl_display, self->egl_context);
+            eglTerminate(self->egl_display);
+            self->renderer_egl_surface = EGL_NO_SURFACE;
+            self->renderer_egl_context = EGL_NO_CONTEXT;
+            self->egl_surface = EGL_NO_SURFACE;
+            self->egl_context = EGL_NO_CONTEXT;
+            self->egl_display = EGL_NO_DISPLAY;
+        }
+
+        if (self->egl_window) {
+            wl_egl_window_destroy(self->egl_window);
+            self->egl_window = NULL;
+        }
+
+        if (self->subsurface) {
+            wl_subsurface_destroy(self->subsurface);
+            self->subsurface = NULL;
+        }
+        if (self->surface) {
+            wl_surface_destroy(self->surface);
+            self->surface = NULL;
+        }
+    } else {
+        g_mutex_lock(&self->present_mutex);
+        self->has_frame = FALSE;
+        self->present_texture = 0;
+        g_mutex_unlock(&self->present_mutex);
+
+        if (self->renderer_egl_surface != EGL_NO_SURFACE) {
             eglDestroySurface(self->egl_display, self->renderer_egl_surface);
-        if (self->renderer_egl_context != EGL_NO_CONTEXT)
+            self->renderer_egl_surface = EGL_NO_SURFACE;
+        }
+        if (self->renderer_egl_context != EGL_NO_CONTEXT) {
             eglDestroyContext(self->egl_display, self->renderer_egl_context);
-        if (self->egl_surface != EGL_NO_SURFACE)
-            eglDestroySurface(self->egl_display, self->egl_surface);
-        if (self->egl_context != EGL_NO_CONTEXT)
-            eglDestroyContext(self->egl_display, self->egl_context);
-        eglTerminate(self->egl_display);
-        self->renderer_egl_surface = EGL_NO_SURFACE;
-        self->renderer_egl_context = EGL_NO_CONTEXT;
-        self->egl_surface = EGL_NO_SURFACE;
-        self->egl_context = EGL_NO_CONTEXT;
+            self->renderer_egl_context = EGL_NO_CONTEXT;
+        }
+
+        g_clear_object(&self->gdk_gl_context);
         self->egl_display = EGL_NO_DISPLAY;
-    }
-
-    if (self->egl_window) {
-        wl_egl_window_destroy(self->egl_window);
-        self->egl_window = NULL;
-    }
-
-    if (self->subsurface) {
-        wl_subsurface_destroy(self->subsurface);
-        self->subsurface = NULL;
-    }
-    if (self->surface) {
-        wl_surface_destroy(self->surface);
-        self->surface = NULL;
     }
 
     GTK_WIDGET_CLASS(flutter_subsurface_view_parent_class)->unrealize(widget);
@@ -444,7 +554,7 @@ static void flutter_subsurface_view_size_allocate(GtkWidget     *widget,
         ->size_allocate(widget, allocation);
 
     FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(widget);
-    if (!self->subsurface)
+    if (!self->use_subsurface || !self->subsurface)
         return;
 
     GtkWidget *toplevel = gtk_widget_get_toplevel(widget);
@@ -484,6 +594,37 @@ static void flutter_subsurface_view_size_allocate(GtkWidget     *widget,
     }
 }
 
+static gboolean flutter_subsurface_view_draw(GtkWidget *widget, cairo_t *cr) {
+    FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(widget);
+
+    if (self->use_subsurface) {
+        /* Subsurface mode: nothing to draw in the parent surface. */
+        return FALSE;
+    }
+
+    /* gdk_cairo_draw_from_gl mode */
+    g_mutex_lock(&self->present_mutex);
+    gboolean has_frame = self->has_frame;
+    GLuint   texture   = self->present_texture;
+    size_t   width     = self->present_width;
+    size_t   height    = self->present_height;
+    g_mutex_unlock(&self->present_mutex);
+
+    if (!has_frame || !self->gdk_gl_context) {
+        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+        cairo_paint(cr);
+        return TRUE;
+    }
+
+    GdkWindow *gdk_window = gtk_widget_get_window(widget);
+    gint scale = gdk_window_get_scale_factor(gdk_window);
+
+    gdk_cairo_draw_from_gl(cr, gdk_window,
+                           (int)texture, GL_TEXTURE, scale,
+                           0, 0, (int)width, (int)height);
+    return TRUE;
+}
+
 static void flutter_subsurface_view_get_preferred_width(GtkWidget *widget G_GNUC_UNUSED,
                                                    gint *minimum, gint *natural) {
     *minimum = 1;
@@ -501,6 +642,7 @@ static void flutter_subsurface_view_finalize(GObject *object) {
 
     g_mutex_clear(&self->resize_mutex);
     g_cond_clear(&self->resize_cond);
+    g_mutex_clear(&self->present_mutex);
 
     if (self->subcompositor) {
         wl_subcompositor_destroy(self->subcompositor);
@@ -523,12 +665,12 @@ static void flutter_subsurface_view_class_init(FlutterSubsurfaceViewClass *klass
     widget_class->realize              = flutter_subsurface_view_realize;
     widget_class->unrealize            = flutter_subsurface_view_unrealize;
     widget_class->size_allocate        = flutter_subsurface_view_size_allocate;
+    widget_class->draw                 = flutter_subsurface_view_draw;
     widget_class->get_preferred_width  = flutter_subsurface_view_get_preferred_width;
     widget_class->get_preferred_height = flutter_subsurface_view_get_preferred_height;
 }
 
 static void flutter_subsurface_view_init(FlutterSubsurfaceView *self) {
-    gtk_widget_set_has_window(GTK_WIDGET(self), FALSE);
     self->egl_display          = EGL_NO_DISPLAY;
     self->egl_context          = EGL_NO_CONTEXT;
     self->egl_surface          = EGL_NO_SURFACE;
@@ -536,15 +678,20 @@ static void flutter_subsurface_view_init(FlutterSubsurfaceView *self) {
     self->renderer_egl_surface = EGL_NO_SURFACE;
     g_mutex_init(&self->resize_mutex);
     g_cond_init(&self->resize_cond);
+    g_mutex_init(&self->present_mutex);
 }
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
-GtkWidget *flutter_subsurface_view_new(FlutterSubsurfaceViewResizeFunc resize_func,
+GtkWidget *flutter_subsurface_view_new(gboolean                        use_subsurface,
+                                       FlutterSubsurfaceViewResizeFunc resize_func,
                                        gpointer                        resize_data) {
     FlutterSubsurfaceView *self = g_object_new(FLUTTER_SUBSURFACE_VIEW_TYPE, NULL);
+    self->use_subsurface = use_subsurface;
     self->resize_func = resize_func;
     self->resize_data = resize_data;
+    if (use_subsurface)
+        gtk_widget_set_has_window(GTK_WIDGET(self), FALSE);
     return GTK_WIDGET(self);
 }
 
@@ -556,19 +703,24 @@ EGLContext flutter_subsurface_view_get_egl_context(FlutterSubsurfaceView *self) 
     return self->egl_context;
 }
 
-/* Callback dispatched to the main thread to trigger a parent commit. */
+/* Callback dispatched to the main thread to trigger a redraw/parent commit. */
 static gboolean queue_draw_idle(gpointer data) {
     FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(data);
+
+    if (!self->use_subsurface) {
+        g_mutex_lock(&self->present_mutex);
+        self->present_scheduled = FALSE;
+        g_mutex_unlock(&self->present_mutex);
+    }
+
     gtk_widget_queue_draw(GTK_WIDGET(self));
     g_object_unref(self);
     return G_SOURCE_REMOVE;
 }
 
-static void flutter_subsurface_view_present(FlutterSubsurfaceView *self,
-                               GLuint            texture_id,
-                               GLenum            texture_format,
-                               size_t            width,
-                               size_t            height) {
+static void present_subsurface(FlutterSubsurfaceView *self,
+                               GLuint texture_id, GLenum texture_format,
+                               size_t width, size_t height) {
     /* Blit the texture to the subsurface directly from the renderer thread.
        This is safe because the main EGL context is not in use on the main
        thread (the main thread is either idle or blocked in size_allocate). */
@@ -600,6 +752,38 @@ static void flutter_subsurface_view_present(FlutterSubsurfaceView *self,
     /* Drive a parent-surface commit (sync mode) from the main thread. */
     g_object_ref(self);
     g_main_context_invoke(NULL, queue_draw_idle, self);
+}
+
+static void present_gl(FlutterSubsurfaceView *self,
+                       GLuint texture_id, size_t width, size_t height) {
+    g_mutex_lock(&self->present_mutex);
+
+    self->present_texture = texture_id;
+    self->present_width   = width;
+    self->present_height  = height;
+    self->has_frame       = TRUE;
+
+    gboolean was_scheduled = self->present_scheduled;
+    if (!was_scheduled) {
+        self->present_scheduled = TRUE;
+        g_object_ref(self);
+    }
+
+    g_mutex_unlock(&self->present_mutex);
+
+    if (!was_scheduled)
+        g_main_context_invoke(NULL, queue_draw_idle, self);
+}
+
+static void flutter_subsurface_view_present(FlutterSubsurfaceView *self,
+                               GLuint            texture_id,
+                               GLenum            texture_format,
+                               size_t            width,
+                               size_t            height) {
+    if (self->use_subsurface)
+        present_subsurface(self, texture_id, texture_format, width, height);
+    else
+        present_gl(self, texture_id, width, height);
 }
 
 static FlutterBackingStore *
