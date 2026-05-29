@@ -1,9 +1,9 @@
-#include "flutter_gl_area_view.h"
+#include "flutter_gl_view.h"
 
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 
-struct _FlutterGLAreaView {
+struct _FlutterGLView {
     GtkDrawingArea parent_instance;
 
     GdkGLContext *gdk_gl_context;
@@ -22,17 +22,17 @@ struct _FlutterGLAreaView {
     size_t   present_height;
 };
 
-static void flutter_gl_area_view_iface_init(FlutterViewInterface *iface);
+static void flutter_gl_view_iface_init(FlutterViewInterface *iface);
 
-G_DEFINE_TYPE_WITH_CODE(FlutterGLAreaView, flutter_gl_area_view, GTK_TYPE_DRAWING_AREA,
-    G_IMPLEMENT_INTERFACE(FLUTTER_TYPE_VIEW, flutter_gl_area_view_iface_init))
+G_DEFINE_TYPE_WITH_CODE(FlutterGLView, flutter_gl_view, GTK_TYPE_DRAWING_AREA,
+    G_IMPLEMENT_INTERFACE(FLUTTER_TYPE_VIEW, flutter_gl_view_iface_init))
 
 /* ── GtkWidget vfuncs ─────────────────────────────────────────────────────── */
 
-static void flutter_gl_area_view_realize(GtkWidget *widget) {
-    GTK_WIDGET_CLASS(flutter_gl_area_view_parent_class)->realize(widget);
+static void flutter_gl_view_realize(GtkWidget *widget) {
+    GTK_WIDGET_CLASS(flutter_gl_view_parent_class)->realize(widget);
 
-    FlutterGLAreaView *self = FLUTTER_GL_AREA_VIEW(widget);
+    FlutterGLView *self = FLUTTER_GL_VIEW(widget);
     GdkWindow *gdk_window = gtk_widget_get_window(widget);
 
     /* Create a GDK GL context for this window.  GDK will also create an
@@ -41,7 +41,7 @@ static void flutter_gl_area_view_realize(GtkWidget *widget) {
     GError *error = NULL;
     self->gdk_gl_context = gdk_window_create_gl_context(gdk_window, &error);
     if (!self->gdk_gl_context) {
-        g_warning("FlutterGLAreaView: failed to create GDK GL context: %s",
+        g_warning("FlutterGLView: failed to create GDK GL context: %s",
                   error->message);
         g_error_free(error);
         return;
@@ -51,7 +51,7 @@ static void flutter_gl_area_view_realize(GtkWidget *widget) {
     gdk_gl_context_set_required_version(self->gdk_gl_context, 2, 0);
 
     if (!gdk_gl_context_realize(self->gdk_gl_context, &error)) {
-        g_warning("FlutterGLAreaView: failed to realize GDK GL context: %s",
+        g_warning("FlutterGLView: failed to realize GDK GL context: %s",
                   error->message);
         g_error_free(error);
         g_clear_object(&self->gdk_gl_context);
@@ -97,22 +97,22 @@ static void flutter_gl_area_view_realize(GtkWidget *widget) {
             self->renderer_egl_surface = eglCreatePbufferSurface(
                 self->egl_display, config, pbuffer_attribs);
             if (self->renderer_egl_surface == EGL_NO_SURFACE) {
-                g_warning("FlutterGLAreaView: failed to create renderer pbuffer");
+                g_warning("FlutterGLView: failed to create renderer pbuffer");
                 eglDestroyContext(self->egl_display, self->renderer_egl_context);
                 self->renderer_egl_context = EGL_NO_CONTEXT;
             }
         } else {
-            g_warning("FlutterGLAreaView: failed to create renderer EGL context");
+            g_warning("FlutterGLView: failed to create renderer EGL context");
         }
     } else {
-        g_warning("FlutterGLAreaView: failed to choose EGL config for renderer");
+        g_warning("FlutterGLView: failed to choose EGL config for renderer");
     }
 
     gdk_gl_context_clear_current();
 }
 
-static void flutter_gl_area_view_unrealize(GtkWidget *widget) {
-    FlutterGLAreaView *self = FLUTTER_GL_AREA_VIEW(widget);
+static void flutter_gl_view_unrealize(GtkWidget *widget) {
+    FlutterGLView *self = FLUTTER_GL_VIEW(widget);
 
     g_mutex_lock(&self->present_mutex);
     self->has_frame = FALSE;
@@ -131,11 +131,11 @@ static void flutter_gl_area_view_unrealize(GtkWidget *widget) {
     g_clear_object(&self->gdk_gl_context);
     self->egl_display = EGL_NO_DISPLAY;
 
-    GTK_WIDGET_CLASS(flutter_gl_area_view_parent_class)->unrealize(widget);
+    GTK_WIDGET_CLASS(flutter_gl_view_parent_class)->unrealize(widget);
 }
 
-static gboolean flutter_gl_area_view_draw(GtkWidget *widget, cairo_t *cr) {
-    FlutterGLAreaView *self = FLUTTER_GL_AREA_VIEW(widget);
+static gboolean flutter_gl_view_draw(GtkWidget *widget, cairo_t *cr) {
+    FlutterGLView *self = FLUTTER_GL_VIEW(widget);
 
     g_mutex_lock(&self->present_mutex);
     gboolean has_frame = self->has_frame;
@@ -160,23 +160,23 @@ static gboolean flutter_gl_area_view_draw(GtkWidget *widget, cairo_t *cr) {
     return TRUE;
 }
 
-static void flutter_gl_area_view_finalize(GObject *object) {
-    FlutterGLAreaView *self = FLUTTER_GL_AREA_VIEW(object);
+static void flutter_gl_view_finalize(GObject *object) {
+    FlutterGLView *self = FLUTTER_GL_VIEW(object);
     g_mutex_clear(&self->present_mutex);
-    G_OBJECT_CLASS(flutter_gl_area_view_parent_class)->finalize(object);
+    G_OBJECT_CLASS(flutter_gl_view_parent_class)->finalize(object);
 }
 
-static void flutter_gl_area_view_class_init(FlutterGLAreaViewClass *klass) {
+static void flutter_gl_view_class_init(FlutterGLViewClass *klass) {
     GObjectClass   *object_class = G_OBJECT_CLASS(klass);
     GtkWidgetClass *widget_class = GTK_WIDGET_CLASS(klass);
 
-    object_class->finalize  = flutter_gl_area_view_finalize;
-    widget_class->realize   = flutter_gl_area_view_realize;
-    widget_class->unrealize = flutter_gl_area_view_unrealize;
-    widget_class->draw      = flutter_gl_area_view_draw;
+    object_class->finalize  = flutter_gl_view_finalize;
+    widget_class->realize   = flutter_gl_view_realize;
+    widget_class->unrealize = flutter_gl_view_unrealize;
+    widget_class->draw      = flutter_gl_view_draw;
 }
 
-static void flutter_gl_area_view_init(FlutterGLAreaView *self) {
+static void flutter_gl_view_init(FlutterGLView *self) {
     self->egl_display          = EGL_NO_DISPLAY;
     self->renderer_egl_context = EGL_NO_CONTEXT;
     self->renderer_egl_surface = EGL_NO_SURFACE;
@@ -185,14 +185,14 @@ static void flutter_gl_area_view_init(FlutterGLAreaView *self) {
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
-GtkWidget *flutter_gl_area_view_new(void) {
-    return g_object_new(FLUTTER_GL_AREA_VIEW_TYPE, NULL);
+GtkWidget *flutter_gl_view_new(void) {
+    return g_object_new(FLUTTER_GL_VIEW_TYPE, NULL);
 }
 
 /* Main-thread callback: schedule a redraw.
    Holds a strong reference to the widget taken in present(). */
 static gboolean do_queue_draw(gpointer data) {
-    FlutterGLAreaView *self = FLUTTER_GL_AREA_VIEW(data);
+    FlutterGLView *self = FLUTTER_GL_VIEW(data);
 
     g_mutex_lock(&self->present_mutex);
     self->present_scheduled = FALSE;
@@ -204,7 +204,7 @@ static gboolean do_queue_draw(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
-static void flutter_gl_area_view_present(FlutterGLAreaView *self,
+static void flutter_gl_view_present(FlutterGLView *self,
                                           GLuint             texture_id,
                                           GLenum             texture_format G_GNUC_UNUSED,
                                           size_t             width,
@@ -229,7 +229,7 @@ static void flutter_gl_area_view_present(FlutterGLAreaView *self,
 }
 
 static FlutterBackingStore *
-flutter_gl_area_view_create_backing_store(FlutterGLAreaView *self G_GNUC_UNUSED,
+flutter_gl_view_create_backing_store(FlutterGLView *self G_GNUC_UNUSED,
                                           size_t             width,
                                           size_t             height) {
     FlutterBackingStore *store = g_new0(FlutterBackingStore, 1);
@@ -248,7 +248,7 @@ flutter_gl_area_view_create_backing_store(FlutterGLAreaView *self G_GNUC_UNUSED,
     return store;
 }
 
-static void flutter_gl_area_view_collect_backing_store(FlutterGLAreaView   *self G_GNUC_UNUSED,
+static void flutter_gl_view_collect_backing_store(FlutterGLView   *self G_GNUC_UNUSED,
                                                 FlutterBackingStore *backing_store) {
     if (!backing_store)
         return;
@@ -259,42 +259,42 @@ static void flutter_gl_area_view_collect_backing_store(FlutterGLAreaView   *self
 /* ── FlutterView interface ────────────────────────────────────────────────── */
 
 static FlutterBackingStore *
-gl_area_view_iface_create_backing_store(FlutterView *view, size_t width, size_t height) {
-    return flutter_gl_area_view_create_backing_store(
-        FLUTTER_GL_AREA_VIEW(view), width, height);
+gl_view_iface_create_backing_store(FlutterView *view, size_t width, size_t height) {
+    return flutter_gl_view_create_backing_store(
+        FLUTTER_GL_VIEW(view), width, height);
 }
 
 static void
-gl_area_view_iface_collect_backing_store(FlutterView         *view,
+gl_view_iface_collect_backing_store(FlutterView         *view,
                                          FlutterBackingStore *backing_store) {
-    flutter_gl_area_view_collect_backing_store(
-        FLUTTER_GL_AREA_VIEW(view), backing_store);
+    flutter_gl_view_collect_backing_store(
+        FLUTTER_GL_VIEW(view), backing_store);
 }
 
 static void
-gl_area_view_iface_present(FlutterView *view, GLuint texture_id,
+gl_view_iface_present(FlutterView *view, GLuint texture_id,
                             GLenum texture_format, size_t width, size_t height) {
-    flutter_gl_area_view_present(FLUTTER_GL_AREA_VIEW(view),
+    flutter_gl_view_present(FLUTTER_GL_VIEW(view),
                                  texture_id, texture_format, width, height);
 }
 
-static gboolean gl_area_view_iface_make_current(FlutterView *view) {
-    FlutterGLAreaView *self = FLUTTER_GL_AREA_VIEW(view);
+static gboolean gl_view_iface_make_current(FlutterView *view) {
+    FlutterGLView *self = FLUTTER_GL_VIEW(view);
     return eglMakeCurrent(self->egl_display, self->renderer_egl_surface,
                           self->renderer_egl_surface,
                           self->renderer_egl_context) == EGL_TRUE;
 }
 
-static void gl_area_view_iface_clear_current(FlutterView *view) {
-    FlutterGLAreaView *self = FLUTTER_GL_AREA_VIEW(view);
+static void gl_view_iface_clear_current(FlutterView *view) {
+    FlutterGLView *self = FLUTTER_GL_VIEW(view);
     eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
                    EGL_NO_CONTEXT);
 }
 
-static void flutter_gl_area_view_iface_init(FlutterViewInterface *iface) {
-    iface->create_backing_store  = gl_area_view_iface_create_backing_store;
-    iface->collect_backing_store = gl_area_view_iface_collect_backing_store;
-    iface->present               = gl_area_view_iface_present;
-    iface->make_current          = gl_area_view_iface_make_current;
-    iface->clear_current         = gl_area_view_iface_clear_current;
+static void flutter_gl_view_iface_init(FlutterViewInterface *iface) {
+    iface->create_backing_store  = gl_view_iface_create_backing_store;
+    iface->collect_backing_store = gl_view_iface_collect_backing_store;
+    iface->present               = gl_view_iface_present;
+    iface->make_current          = gl_view_iface_make_current;
+    iface->clear_current         = gl_view_iface_clear_current;
 }

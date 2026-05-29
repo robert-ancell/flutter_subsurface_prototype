@@ -1,7 +1,7 @@
 #include <gtk/gtk.h>
 
 #include "renderer.h"
-#include "flutter_gl_area_view.h"
+#include "flutter_gl_view.h"
 #include "flutter_subsurface_view.h"
 
 /* ── Command-line options ─────────────────────────────────────────────────── */
@@ -59,7 +59,7 @@ static void activate(GtkApplication *app, gpointer user_data G_GNUC_UNUSED) {
     gtk_window_set_default_size(GTK_WINDOW(window), 800, 600);
 
     GtkWidget *widget = opt_glarea
-        ? flutter_gl_area_view_new()
+        ? flutter_gl_view_new()
         : flutter_subsurface_view_new();
     gtk_container_add(GTK_CONTAINER(window), widget);
 
