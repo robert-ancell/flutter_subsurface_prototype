@@ -695,14 +695,6 @@ GtkWidget *flutter_subsurface_view_new(gboolean                        use_subsu
     return GTK_WIDGET(self);
 }
 
-EGLDisplay flutter_subsurface_view_get_egl_display(FlutterSubsurfaceView *self) {
-    return self->egl_display;
-}
-
-EGLContext flutter_subsurface_view_get_egl_context(FlutterSubsurfaceView *self) {
-    return self->egl_context;
-}
-
 /* Callback dispatched to the main thread to trigger a redraw/parent commit. */
 static gboolean queue_draw_idle(gpointer data) {
     FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(data);

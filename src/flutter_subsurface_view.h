@@ -26,7 +26,4 @@ GtkWidget  *flutter_subsurface_view_new(gboolean                        use_subs
                                         FlutterSubsurfaceViewResizeFunc resize_func,
                                         gpointer                        resize_data);
 
-EGLDisplay  flutter_subsurface_view_get_egl_display(FlutterSubsurfaceView *self);
-EGLContext  flutter_subsurface_view_get_egl_context(FlutterSubsurfaceView *self);
-
 G_END_DECLS
