@@ -107,9 +107,9 @@ static gboolean setup_gl(FlutterSubsurfaceView *self) {
         "}\n";
 
     GLuint vert = compile_shader(GL_VERTEX_SHADER,   vert_src);
-    if (!vert) return FALSE;
+    if (vert == 0) return FALSE;
     GLuint frag = compile_shader(GL_FRAGMENT_SHADER, frag_src);
-    if (!frag) { glDeleteShader(vert); return FALSE; }
+    if (frag == 0) { glDeleteShader(vert); return FALSE; }
 
     self->gl_program = glCreateProgram();
     glAttachShader(self->gl_program, vert);
