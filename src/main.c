@@ -73,8 +73,17 @@ static void activate(GtkApplication *app, gpointer user_data G_GNUC_UNUSED) {
     AppData *app_data  = g_new0(AppData, 1);
     app_data->renderer = renderer_new(FLUTTER_VIEW(widget));
 
-    g_signal_connect(widget, "size-allocate",
-                     G_CALLBACK(on_size_allocate), app_data);
+    /* For subsurface mode, the widget handles resize synchronization
+       internally and needs a reference to the renderer. */
+    if (FLUTTER_IS_SUBSURFACE_VIEW(widget))
+        flutter_subsurface_view_set_renderer(FLUTTER_SUBSURFACE_VIEW(widget),
+                                             app_data->renderer);
+
+    /* For GL view mode, resize is handled externally via signal. */
+    if (!FLUTTER_IS_SUBSURFACE_VIEW(widget))
+        g_signal_connect(widget, "size-allocate",
+                         G_CALLBACK(on_size_allocate), app_data);
+
     g_signal_connect(window, "delete-event",
                      G_CALLBACK(on_delete_event), app_data);
     g_signal_connect_swapped(window, "destroy",

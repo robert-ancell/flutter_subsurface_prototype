@@ -1,4 +1,5 @@
 #include "flutter_subsurface_view.h"
+#include "renderer.h"
 
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
@@ -24,6 +25,7 @@ struct _FlutterSubsurfaceView {
     GtkWidget parent_instance;
 
     gint scale;
+    Renderer *renderer;  /* weak ref, set externally */
 
     struct wl_compositor    *compositor;
     struct wl_subcompositor *subcompositor;
@@ -49,13 +51,13 @@ struct _FlutterSubsurfaceView {
     PFNGLBLITFRAMEBUFFERPROC p_glBlitFramebuffer;
     GLuint                   blit_read_fbo;
 
-    /* Thread-safe pending-present state */
-    GMutex   present_mutex;
-    gboolean present_scheduled;
-    GLuint   present_texture_id;
-    GLenum   present_texture_format;
-    size_t   present_width;
-    size_t   present_height;
+    /* Resize synchronization: size_allocate blocks until the renderer
+       delivers a frame at the new size. */
+    GMutex   resize_mutex;
+    GCond    resize_cond;
+    gboolean resize_done;
+    size_t   resize_expected_width;
+    size_t   resize_expected_height;
 };
 
 static void flutter_subsurface_view_iface_init(FlutterViewInterface *iface);
@@ -450,6 +452,32 @@ static void flutter_subsurface_view_size_allocate(GtkWidget     *widget,
         size_t pw = (size_t)allocation->width * self->scale;
         size_t ph = (size_t)allocation->height * self->scale;
         wl_egl_window_resize(self->egl_window, pw, ph, 0, 0);
+
+        /* Block until the renderer delivers a frame at the new size.
+           This ensures the subsurface content is ready before GTK commits
+           the parent surface, preventing white borders during resize. */
+        g_mutex_lock(&self->resize_mutex);
+        self->resize_done = FALSE;
+        self->resize_expected_width = pw;
+        self->resize_expected_height = ph;
+        g_mutex_unlock(&self->resize_mutex);
+
+        /* Signal the renderer to produce a frame at the new size. */
+        if (self->renderer)
+            renderer_resize(self->renderer,
+                            (size_t)allocation->width,
+                            (size_t)allocation->height,
+                            self->scale);
+
+        /* Wait with a timeout to avoid deadlock if the renderer hasn't
+           started yet (e.g. initial size_allocate before renderer_new). */
+        gint64 deadline = g_get_monotonic_time() + 100 * G_TIME_SPAN_MILLISECOND;
+        g_mutex_lock(&self->resize_mutex);
+        while (!self->resize_done) {
+            if (!g_cond_wait_until(&self->resize_cond, &self->resize_mutex, deadline))
+                break;  /* timed out */
+        }
+        g_mutex_unlock(&self->resize_mutex);
     }
 }
 
@@ -468,7 +496,8 @@ static void flutter_subsurface_view_get_preferred_height(GtkWidget *widget G_GNU
 static void flutter_subsurface_view_finalize(GObject *object) {
     FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(object);
 
-    g_mutex_clear(&self->present_mutex);
+    g_mutex_clear(&self->resize_mutex);
+    g_cond_clear(&self->resize_cond);
 
     if (self->subcompositor) {
         wl_subcompositor_destroy(self->subcompositor);
@@ -502,13 +531,19 @@ static void flutter_subsurface_view_init(FlutterSubsurfaceView *self) {
     self->egl_surface          = EGL_NO_SURFACE;
     self->renderer_egl_context = EGL_NO_CONTEXT;
     self->renderer_egl_surface = EGL_NO_SURFACE;
-    g_mutex_init(&self->present_mutex);
+    g_mutex_init(&self->resize_mutex);
+    g_cond_init(&self->resize_cond);
 }
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
 GtkWidget *flutter_subsurface_view_new(void) {
     return g_object_new(FLUTTER_SUBSURFACE_VIEW_TYPE, NULL);
+}
+
+void flutter_subsurface_view_set_renderer(FlutterSubsurfaceView *self,
+                                          Renderer              *renderer) {
+    self->renderer = renderer;
 }
 
 EGLDisplay flutter_subsurface_view_get_egl_display(FlutterSubsurfaceView *self) {
@@ -519,25 +554,16 @@ EGLContext flutter_subsurface_view_get_egl_context(FlutterSubsurfaceView *self) 
     return self->egl_context;
 }
 
-/* Main-thread callback that performs the actual render.
-   Holds a strong reference to the widget (taken in flutter_subsurface_view_present)
-   so it is safe even if the widget is destroyed before the idle runs. */
-static gboolean do_present(gpointer data) {
-    FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(data);
-
-    /* Snapshot the latest frame under the lock, then release before rendering
-       so callers on other threads are never blocked by GPU work. */
-    g_mutex_lock(&self->present_mutex);
-    GLuint texture_id     = self->present_texture_id;
-    GLenum texture_format = self->present_texture_format;
-    size_t width          = self->present_width;
-    size_t height         = self->present_height;
-    self->present_scheduled = FALSE;
-    g_mutex_unlock(&self->present_mutex);
-
+static void flutter_subsurface_view_present(FlutterSubsurfaceView *self,
+                               GLuint            texture_id,
+                               GLenum            texture_format,
+                               size_t            width,
+                               size_t            height) {
+    /* Blit the texture to the subsurface directly from the renderer thread.
+       This is safe because the main EGL context is not in use on the main
+       thread (the main thread is either idle or blocked in size_allocate). */
     if (self->egl_display != EGL_NO_DISPLAY &&
         self->egl_surface != EGL_NO_SURFACE) {
-        /* Resize the EGL surface if the texture dimensions changed. */
         EGLint cur_w, cur_h;
         eglQuerySurface(self->egl_display, self->egl_surface, EGL_WIDTH,  &cur_w);
         eglQuerySurface(self->egl_display, self->egl_surface, EGL_HEIGHT, &cur_h);
@@ -546,39 +572,23 @@ static gboolean do_present(gpointer data) {
 
         render_texture(self, texture_id, texture_format, width, height);
 
-        /* Drive a parent-surface commit so the compositor applies our
-           cached subsurface commit atomically (sync mode). */
-        gtk_widget_queue_draw(GTK_WIDGET(self));
+        /* Restore the renderer context (render_texture made the main one current). */
+        eglMakeCurrent(self->egl_display, self->renderer_egl_surface,
+                       self->renderer_egl_surface, self->renderer_egl_context);
     }
 
-    g_object_unref(self);
-    return G_SOURCE_REMOVE;
-}
-
-static void flutter_subsurface_view_present(FlutterSubsurfaceView *self,
-                               GLuint            texture_id,
-                               GLenum            texture_format,
-                               size_t            width,
-                               size_t            height) {
-    g_mutex_lock(&self->present_mutex);
-
-    self->present_texture_id     = texture_id;
-    self->present_texture_format = texture_format;
-    self->present_width          = width;
-    self->present_height         = height;
-
-    /* Only schedule one dispatch at a time; later calls before it fires
-       just update the stored frame so the freshest data is always used. */
-    gboolean was_scheduled = self->present_scheduled;
-    if (!was_scheduled) {
-        self->present_scheduled = TRUE;
-        g_object_ref(self);     /* balanced by g_object_unref in do_present */
+    /* Signal any blocked resize if this frame matches the expected size. */
+    g_mutex_lock(&self->resize_mutex);
+    if (!self->resize_done &&
+        width == self->resize_expected_width &&
+        height == self->resize_expected_height) {
+        self->resize_done = TRUE;
+        g_cond_signal(&self->resize_cond);
     }
+    g_mutex_unlock(&self->resize_mutex);
 
-    g_mutex_unlock(&self->present_mutex);
-
-    if (!was_scheduled)
-        g_main_context_invoke(NULL, do_present, self);
+    /* Queue a GTK draw to drive the parent-surface commit (sync mode). */
+    gtk_widget_queue_draw(GTK_WIDGET(self));
 }
 
 static FlutterBackingStore *
