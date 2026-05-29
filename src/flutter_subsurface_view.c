@@ -450,10 +450,6 @@ static void flutter_subsurface_view_size_allocate(GtkWidget     *widget,
         size_t pw = (size_t)allocation->width * self->scale;
         size_t ph = (size_t)allocation->height * self->scale;
         wl_egl_window_resize(self->egl_window, pw, ph, 0, 0);
-        render_clear(self, pw, ph);
-        /* Drive a parent-surface commit so the cached subsurface commit
-           is applied (sync mode). */
-        gtk_widget_queue_draw(widget);
     }
 }
 
