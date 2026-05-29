@@ -10,6 +10,8 @@
 struct _FlutterSubsurfaceView {
     GtkWidget parent_instance;
 
+    gint scale;
+
     struct wl_compositor    *compositor;
     struct wl_subcompositor *subcompositor;
     struct wl_surface       *surface;
@@ -224,7 +226,9 @@ static gboolean setup_egl(FlutterSubsurfaceView *self, struct wl_display *displa
         return FALSE;
     }
 
-    self->egl_window = wl_egl_window_create(self->surface, width, height);
+    self->egl_window = wl_egl_window_create(self->surface,
+                                             width * self->scale,
+                                             height * self->scale);
     if (!self->egl_window) {
         g_warning("Failed to create wl_egl_window");
         return FALSE;
@@ -237,6 +241,8 @@ static gboolean setup_egl(FlutterSubsurfaceView *self, struct wl_display *displa
         g_warning("Failed to create EGL window surface");
         return FALSE;
     }
+
+    wl_surface_set_buffer_scale(self->surface, self->scale);
 
     eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
                    self->egl_context);
@@ -336,10 +342,12 @@ static void flutter_subsurface_view_realize(GtkWidget *widget) {
 
     GtkAllocation alloc;
     gtk_widget_get_allocation(widget, &alloc);
+    self->scale = gtk_widget_get_scale_factor(widget);
     if (!setup_egl(self, display, alloc.width, alloc.height))
         return;
 
-    render_clear(self, alloc.width, alloc.height);
+    render_clear(self, (size_t)alloc.width * self->scale,
+                       (size_t)alloc.height * self->scale);
 }
 
 static void flutter_subsurface_view_unrealize(GtkWidget *widget) {
@@ -399,9 +407,10 @@ static void flutter_subsurface_view_size_allocate(GtkWidget     *widget,
     wl_subsurface_set_position(self->subsurface, x, y);
 
     if (self->egl_window) {
-        wl_egl_window_resize(self->egl_window,
-                             allocation->width, allocation->height, 0, 0);
-        render_clear(self, allocation->width, allocation->height);
+        size_t pw = (size_t)allocation->width * self->scale;
+        size_t ph = (size_t)allocation->height * self->scale;
+        wl_egl_window_resize(self->egl_window, pw, ph, 0, 0);
+        render_clear(self, pw, ph);
         /* Drive a parent-surface commit so the cached subsurface commit
            is applied (sync mode). */
         gtk_widget_queue_draw(widget);
