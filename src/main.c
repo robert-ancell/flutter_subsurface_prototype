@@ -1,31 +1,17 @@
 #include <gtk/gtk.h>
 
 #include "renderer.h"
-#include "flutter_gl_view.h"
 #include "flutter_subsurface_view.h"
 
 /* ── Command-line options ─────────────────────────────────────────────────── */
 
-static gboolean opt_glarea    = FALSE;
 static gboolean opt_subsurface = FALSE;
 
 static const GOptionEntry option_entries[] = {
-    { "glarea",     0, 0, G_OPTION_ARG_NONE, &opt_glarea,
-      "Use GtkGLArea renderer", NULL },
     { "subsurface", 0, 0, G_OPTION_ARG_NONE, &opt_subsurface,
-      "Use Wayland subsurface renderer (default)", NULL },
+      "Use Wayland subsurface renderer instead of gdk_cairo_draw_from_gl", NULL },
     { NULL }
 };
-
-static gint on_handle_local_options(GApplication *app     G_GNUC_UNUSED,
-                                     GVariantDict *options G_GNUC_UNUSED,
-                                     gpointer      data    G_GNUC_UNUSED) {
-    if (opt_glarea && opt_subsurface) {
-        g_printerr("Error: --glarea and --subsurface are mutually exclusive\n");
-        return 1;
-    }
-    return -1; /* continue normal startup */
-}
 
 /* ── App callbacks ────────────────────────────────────────────────────────── */
 
@@ -43,21 +29,8 @@ static gboolean on_delete_event(GtkWidget *window   G_GNUC_UNUSED,
     return FALSE;
 }
 
-static void on_size_allocate(GtkWidget     *widget     G_GNUC_UNUSED,
-                              GtkAllocation *allocation,
-                              gpointer       data) {
-    AppData *app_data = data;
-    if (app_data->renderer) {
-        gint scale = gtk_widget_get_scale_factor(widget);
-        renderer_resize(app_data->renderer,
-                        (size_t)allocation->width,
-                        (size_t)allocation->height,
-                        scale);
-    }
-}
-
-static void on_subsurface_resize(size_t width, size_t height,
-                                  gint scale, gpointer user_data) {
+static void on_resize(size_t width, size_t height,
+                      gint scale, gpointer user_data) {
     AppData *app_data = user_data;
     if (app_data->renderer)
         renderer_resize(app_data->renderer, width, height, scale);
@@ -70,12 +43,8 @@ static void activate(GtkApplication *app, gpointer user_data G_GNUC_UNUSED) {
 
     AppData *app_data = g_new0(AppData, 1);
 
-    GtkWidget *widget;
-    if (opt_glarea)
-        widget = flutter_gl_view_new();
-    else
-        widget = flutter_subsurface_view_new(opt_subsurface,
-                                             on_subsurface_resize, app_data);
+    GtkWidget *widget = flutter_subsurface_view_new(opt_subsurface,
+                                                    on_resize, app_data);
     gtk_container_add(GTK_CONTAINER(window), widget);
 
     gtk_widget_show_all(window);
@@ -83,11 +52,6 @@ static void activate(GtkApplication *app, gpointer user_data G_GNUC_UNUSED) {
     /* Widget is realized after show_all; create the renderer now that the
        widget's EGL context exists. */
     app_data->renderer = renderer_new(FLUTTER_VIEW(widget));
-
-    /* For FlutterGLView, resize is handled externally via signal. */
-    if (opt_glarea)
-        g_signal_connect(widget, "size-allocate",
-                         G_CALLBACK(on_size_allocate), app_data);
 
     g_signal_connect(window, "delete-event",
                      G_CALLBACK(on_delete_event), app_data);
@@ -100,8 +64,6 @@ int main(int argc, char **argv) {
         "com.example.flutter-subsurface-prototype", 0);
 
     g_application_add_main_option_entries(G_APPLICATION(app), option_entries);
-    g_signal_connect(app, "handle-local-options",
-                     G_CALLBACK(on_handle_local_options), NULL);
     g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
 
     int status = g_application_run(G_APPLICATION(app), argc, argv);
