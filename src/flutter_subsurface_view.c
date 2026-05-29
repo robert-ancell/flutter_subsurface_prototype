@@ -390,6 +390,10 @@ static void flutter_subsurface_view_realize(GtkWidget *widget) {
 
     render_clear(self, (size_t)alloc.width * self->scale,
                        (size_t)alloc.height * self->scale);
+
+    /* Release the EGL context so the renderer thread can use it. */
+    eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                   EGL_NO_CONTEXT);
 }
 
 static void flutter_subsurface_view_unrealize(GtkWidget *widget) {
@@ -552,6 +556,14 @@ EGLContext flutter_subsurface_view_get_egl_context(FlutterSubsurfaceView *self) 
     return self->egl_context;
 }
 
+/* Callback dispatched to the main thread to trigger a parent commit. */
+static gboolean queue_draw_idle(gpointer data) {
+    FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(data);
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+    g_object_unref(self);
+    return G_SOURCE_REMOVE;
+}
+
 static void flutter_subsurface_view_present(FlutterSubsurfaceView *self,
                                GLuint            texture_id,
                                GLenum            texture_format,
@@ -585,8 +597,9 @@ static void flutter_subsurface_view_present(FlutterSubsurfaceView *self,
     }
     g_mutex_unlock(&self->resize_mutex);
 
-    /* Queue a GTK draw to drive the parent-surface commit (sync mode). */
-    gtk_widget_queue_draw(GTK_WIDGET(self));
+    /* Drive a parent-surface commit (sync mode) from the main thread. */
+    g_object_ref(self);
+    g_main_context_invoke(NULL, queue_draw_idle, self);
 }
 
 static FlutterBackingStore *
