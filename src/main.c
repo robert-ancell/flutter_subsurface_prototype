@@ -56,28 +56,30 @@ static void on_size_allocate(GtkWidget     *widget     G_GNUC_UNUSED,
     }
 }
 
+static void on_subsurface_resize(size_t width, size_t height,
+                                  gint scale, gpointer user_data) {
+    AppData *app_data = user_data;
+    if (app_data->renderer)
+        renderer_resize(app_data->renderer, width, height, scale);
+}
+
 static void activate(GtkApplication *app, gpointer user_data G_GNUC_UNUSED) {
     GtkWidget *window = gtk_application_window_new(app);
     gtk_window_set_title(GTK_WINDOW(window), "Subsurface Prototype");
     gtk_window_set_default_size(GTK_WINDOW(window), 800, 600);
 
+    AppData *app_data = g_new0(AppData, 1);
+
     GtkWidget *widget = opt_glarea
         ? flutter_gl_view_new()
-        : flutter_subsurface_view_new();
+        : flutter_subsurface_view_new(on_subsurface_resize, app_data);
     gtk_container_add(GTK_CONTAINER(window), widget);
 
     gtk_widget_show_all(window);
 
     /* Widget is realized after show_all; create the renderer now that the
        widget's EGL context exists. */
-    AppData *app_data  = g_new0(AppData, 1);
     app_data->renderer = renderer_new(FLUTTER_VIEW(widget));
-
-    /* For subsurface mode, the widget handles resize synchronization
-       internally and needs a reference to the renderer. */
-    if (FLUTTER_IS_SUBSURFACE_VIEW(widget))
-        flutter_subsurface_view_set_renderer(FLUTTER_SUBSURFACE_VIEW(widget),
-                                             app_data->renderer);
 
     /* For GL view mode, resize is handled externally via signal. */
     if (!FLUTTER_IS_SUBSURFACE_VIEW(widget))

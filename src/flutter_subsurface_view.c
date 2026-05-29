@@ -1,5 +1,4 @@
 #include "flutter_subsurface_view.h"
-#include "renderer.h"
 
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
@@ -25,7 +24,8 @@ struct _FlutterSubsurfaceView {
     GtkWidget parent_instance;
 
     gint scale;
-    Renderer *renderer;  /* weak ref, set externally */
+    FlutterSubsurfaceViewResizeFunc resize_func;
+    gpointer                        resize_data;
 
     struct wl_compositor    *compositor;
     struct wl_subcompositor *subcompositor;
@@ -463,11 +463,10 @@ static void flutter_subsurface_view_size_allocate(GtkWidget     *widget,
         g_mutex_unlock(&self->resize_mutex);
 
         /* Signal the renderer to produce a frame at the new size. */
-        if (self->renderer)
-            renderer_resize(self->renderer,
-                            (size_t)allocation->width,
-                            (size_t)allocation->height,
-                            self->scale);
+        if (self->resize_func)
+            self->resize_func((size_t)allocation->width,
+                              (size_t)allocation->height,
+                              self->scale, self->resize_data);
 
         /* Wait with a timeout to avoid deadlock if the renderer hasn't
            started yet (e.g. initial size_allocate before renderer_new). */
@@ -537,13 +536,12 @@ static void flutter_subsurface_view_init(FlutterSubsurfaceView *self) {
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
-GtkWidget *flutter_subsurface_view_new(void) {
-    return g_object_new(FLUTTER_SUBSURFACE_VIEW_TYPE, NULL);
-}
-
-void flutter_subsurface_view_set_renderer(FlutterSubsurfaceView *self,
-                                          Renderer              *renderer) {
-    self->renderer = renderer;
+GtkWidget *flutter_subsurface_view_new(FlutterSubsurfaceViewResizeFunc resize_func,
+                                       gpointer                        resize_data) {
+    FlutterSubsurfaceView *self = g_object_new(FLUTTER_SUBSURFACE_VIEW_TYPE, NULL);
+    self->resize_func = resize_func;
+    self->resize_data = resize_data;
+    return GTK_WIDGET(self);
 }
 
 EGLDisplay flutter_subsurface_view_get_egl_display(FlutterSubsurfaceView *self) {
