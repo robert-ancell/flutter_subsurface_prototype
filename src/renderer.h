@@ -21,13 +21,15 @@ Renderer *renderer_new(FlutterView *view);
 /**
  * renderer_resize:
  * @renderer: the renderer
- * @width: new render width in pixels
- * @height: new render height in pixels
+ * @width: new render width in logical pixels
+ * @height: new render height in logical pixels
+ * @scale: scale factor (e.g. 2 for HiDPI)
  *
- * Schedules a resize of the render target.  Safe to call from any thread,
+ * Schedules a resize of the render target.  The actual framebuffer size
+ * is @width * @scale by @height * @scale.  Safe to call from any thread,
  * including the GTK main thread from a size-allocate handler.
  */
-void renderer_resize(Renderer *renderer, size_t width, size_t height);
+void renderer_resize(Renderer *renderer, size_t width, size_t height, gint scale);
 
 /**
  * renderer_free:

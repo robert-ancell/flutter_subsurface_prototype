@@ -47,10 +47,13 @@ static void on_size_allocate(GtkWidget     *widget     G_GNUC_UNUSED,
                               GtkAllocation *allocation,
                               gpointer       data) {
     AppData *app_data = data;
-    if (app_data->renderer)
+    if (app_data->renderer) {
+        gint scale = gtk_widget_get_scale_factor(widget);
         renderer_resize(app_data->renderer,
                         (size_t)allocation->width,
-                        (size_t)allocation->height);
+                        (size_t)allocation->height,
+                        scale);
+    }
 }
 
 static void activate(GtkApplication *app, gpointer user_data G_GNUC_UNUSED) {

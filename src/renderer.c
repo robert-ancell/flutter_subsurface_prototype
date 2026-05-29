@@ -242,10 +242,12 @@ Renderer *renderer_new(FlutterView *widget) {
     GtkAllocation alloc;
     gtk_widget_get_allocation(GTK_WIDGET(widget), &alloc);
 
+    gint scale = gtk_widget_get_scale_factor(GTK_WIDGET(widget));
+
     Renderer *r = g_new0(Renderer, 1);
     r->widget  = widget;
-    r->width   = (size_t)alloc.width;
-    r->height  = (size_t)alloc.height;
+    r->width   = (size_t)alloc.width * (size_t)scale;
+    r->height  = (size_t)alloc.height * (size_t)scale;
     r->running = TRUE;
     g_mutex_init(&r->mutex);
     g_cond_init(&r->cond);
@@ -272,10 +274,10 @@ void renderer_free(Renderer *r) {
     g_free(r);
 }
 
-void renderer_resize(Renderer *r, size_t width, size_t height) {
+void renderer_resize(Renderer *r, size_t width, size_t height, gint scale) {
     g_mutex_lock(&r->mutex);
-    r->pending_width  = width;
-    r->pending_height = height;
+    r->pending_width  = width * (size_t)scale;
+    r->pending_height = height * (size_t)scale;
     r->resize_pending = TRUE;
     g_cond_signal(&r->cond);
     g_mutex_unlock(&r->mutex);
