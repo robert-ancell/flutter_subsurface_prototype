@@ -20,26 +20,26 @@ typedef struct {
     size_t height;
 } FlutterBackingStore;
 
+/**
+ * FlutterViewResizeFunc:
+ * @width: new width in logical pixels
+ * @height: new height in logical pixels
+ * @scale: display scale factor
+ * @user_data: data passed to flutter_view_new()
+ *
+ * Called when the view is resized and needs a new frame.
+ */
+typedef void (*FlutterViewResizeFunc)(size_t   width,
+                                      size_t   height,
+                                      gint     scale,
+                                      gpointer user_data);
+
 #define FLUTTER_TYPE_VIEW (flutter_view_get_type())
-G_DECLARE_INTERFACE(FlutterView, flutter_view, FLUTTER, VIEW, GtkWidget)
+G_DECLARE_FINAL_TYPE(FlutterView, flutter_view, FLUTTER, VIEW, GtkDrawingArea)
 
-struct _FlutterViewInterface {
-    GTypeInterface parent_iface;
-
-    FlutterBackingStore *(*create_backing_store)(FlutterView *self,
-                                                 size_t       width,
-                                                 size_t       height);
-    void (*collect_backing_store)(FlutterView         *self,
-                                  FlutterBackingStore *backing_store);
-    void (*present)(FlutterView *self,
-                    GLuint       texture_id,
-                    GLenum       texture_format,
-                    size_t       width,
-                    size_t       height);
-
-    gboolean (*make_current)(FlutterView *self);
-    void     (*clear_current)(FlutterView *self);
-};
+GtkWidget *flutter_view_new(gboolean              use_subsurface,
+                            FlutterViewResizeFunc  resize_func,
+                            gpointer              resize_data);
 
 FlutterBackingStore *flutter_view_create_backing_store(FlutterView *self,
                                                        size_t       width,

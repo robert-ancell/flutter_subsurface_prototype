@@ -54,10 +54,10 @@ static GLuint compile_shader(GLenum type, const char *src) {
    Any existing FBO and backing store are released first. */
 static gboolean create_fbo(Renderer *r) {
     if (r->fbo) { glDeleteFramebuffers(1, &r->fbo); r->fbo = 0; }
-    flutter_view_collect_backing_store(FLUTTER_VIEW(r->widget), r->backing_store);
+    flutter_view_collect_backing_store(r->widget, r->backing_store);
 
     r->backing_store = flutter_view_create_backing_store(
-        FLUTTER_VIEW(r->widget), r->width, r->height);
+        r->widget, r->width, r->height);
     if (!r->backing_store)
         return FALSE;
 
@@ -143,7 +143,7 @@ static gboolean setup_gl(Renderer *r) {
 
 static void teardown_gl(Renderer *r) {
     if (r->fbo) { glDeleteFramebuffers(1, &r->fbo); r->fbo = 0; }
-    flutter_view_collect_backing_store(FLUTTER_VIEW(r->widget), r->backing_store);
+    flutter_view_collect_backing_store(r->widget, r->backing_store);
     r->backing_store = NULL;
     if (r->vbo)     { glDeleteBuffers(1, &r->vbo);    r->vbo     = 0; }
     if (r->program) { glDeleteProgram(r->program);    r->program = 0; }
@@ -225,7 +225,7 @@ static gpointer renderer_thread_func(gpointer data) {
         float angle   = elapsed * ((float)G_PI * 2.0f / 4.0f); /* one rotation per 4 s */
 
         render_frame(r, angle);
-        flutter_view_present(FLUTTER_VIEW(r->widget),
+        flutter_view_present(r->widget,
                              r->backing_store->texture, GL_RGBA,
                              r->backing_store->width,
                              r->backing_store->height);

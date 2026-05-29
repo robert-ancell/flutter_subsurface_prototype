@@ -1,7 +1,7 @@
 #include <gtk/gtk.h>
 
 #include "renderer.h"
-#include "flutter_subsurface_view.h"
+#include "flutter_view.h"
 
 /* ── Command-line options ─────────────────────────────────────────────────── */
 
@@ -43,14 +43,11 @@ static void activate(GtkApplication *app, gpointer user_data G_GNUC_UNUSED) {
 
     AppData *app_data = g_new0(AppData, 1);
 
-    GtkWidget *widget = flutter_subsurface_view_new(opt_subsurface,
-                                                    on_resize, app_data);
+    GtkWidget *widget = flutter_view_new(opt_subsurface, on_resize, app_data);
     gtk_container_add(GTK_CONTAINER(window), widget);
 
     gtk_widget_show_all(window);
 
-    /* Widget is realized after show_all; create the renderer now that the
-       widget's EGL context exists. */
     app_data->renderer = renderer_new(FLUTTER_VIEW(widget));
 
     g_signal_connect(window, "delete-event",
