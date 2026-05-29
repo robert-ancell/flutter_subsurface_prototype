@@ -554,44 +554,43 @@ static void flutter_subsurface_view_size_allocate(GtkWidget     *widget,
         ->size_allocate(widget, allocation);
 
     FlutterSubsurfaceView *self = FLUTTER_SUBSURFACE_VIEW(widget);
-    if (!self->use_subsurface || !self->subsurface)
-        return;
 
-    GtkWidget *toplevel = gtk_widget_get_toplevel(widget);
-    gint x, y;
-    gtk_widget_translate_coordinates(widget, toplevel, 0, 0, &x, &y);
-    wl_subsurface_set_position(self->subsurface, x, y);
+    gint scale = gtk_widget_get_scale_factor(widget);
+    size_t pw = (size_t)allocation->width * scale;
+    size_t ph = (size_t)allocation->height * scale;
 
-    if (self->egl_window) {
-        size_t pw = (size_t)allocation->width * self->scale;
-        size_t ph = (size_t)allocation->height * self->scale;
-        wl_egl_window_resize(self->egl_window, pw, ph, 0, 0);
+    if (self->use_subsurface) {
+        if (!self->subsurface)
+            return;
 
-        /* Block until the renderer delivers a frame at the new size.
-           This ensures the subsurface content is ready before GTK commits
-           the parent surface, preventing white borders during resize. */
-        g_mutex_lock(&self->resize_mutex);
-        self->resize_done = FALSE;
-        self->resize_expected_width = pw;
-        self->resize_expected_height = ph;
-        g_mutex_unlock(&self->resize_mutex);
+        GtkWidget *toplevel = gtk_widget_get_toplevel(widget);
+        gint x, y;
+        gtk_widget_translate_coordinates(widget, toplevel, 0, 0, &x, &y);
+        wl_subsurface_set_position(self->subsurface, x, y);
 
-        /* Signal the renderer to produce a frame at the new size. */
-        if (self->resize_func)
-            self->resize_func((size_t)allocation->width,
-                              (size_t)allocation->height,
-                              self->scale, self->resize_data);
-
-        /* Wait with a timeout to avoid deadlock if the renderer hasn't
-           started yet (e.g. initial size_allocate before renderer_new). */
-        gint64 deadline = g_get_monotonic_time() + 100 * G_TIME_SPAN_MILLISECOND;
-        g_mutex_lock(&self->resize_mutex);
-        while (!self->resize_done) {
-            if (!g_cond_wait_until(&self->resize_cond, &self->resize_mutex, deadline))
-                break;  /* timed out */
-        }
-        g_mutex_unlock(&self->resize_mutex);
+        if (self->egl_window)
+            wl_egl_window_resize(self->egl_window, pw, ph, 0, 0);
     }
+
+    /* Block until the renderer delivers a frame at the new size. */
+    g_mutex_lock(&self->resize_mutex);
+    self->resize_done = FALSE;
+    self->resize_expected_width = pw;
+    self->resize_expected_height = ph;
+    g_mutex_unlock(&self->resize_mutex);
+
+    if (self->resize_func)
+        self->resize_func((size_t)allocation->width,
+                          (size_t)allocation->height,
+                          scale, self->resize_data);
+
+    gint64 deadline = g_get_monotonic_time() + 100 * G_TIME_SPAN_MILLISECOND;
+    g_mutex_lock(&self->resize_mutex);
+    while (!self->resize_done) {
+        if (!g_cond_wait_until(&self->resize_cond, &self->resize_mutex, deadline))
+            break;
+    }
+    g_mutex_unlock(&self->resize_mutex);
 }
 
 static gboolean flutter_subsurface_view_draw(GtkWidget *widget, cairo_t *cr) {
@@ -762,6 +761,16 @@ static void present_gl(FlutterSubsurfaceView *self,
     }
 
     g_mutex_unlock(&self->present_mutex);
+
+    /* Signal any blocked resize if this frame matches the expected size. */
+    g_mutex_lock(&self->resize_mutex);
+    if (!self->resize_done &&
+        width == self->resize_expected_width &&
+        height == self->resize_expected_height) {
+        self->resize_done = TRUE;
+        g_cond_signal(&self->resize_cond);
+    }
+    g_mutex_unlock(&self->resize_mutex);
 
     if (!was_scheduled)
         g_main_context_invoke(NULL, queue_draw_idle, self);
