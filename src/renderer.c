@@ -198,8 +198,8 @@ static gpointer renderer_thread_func(gpointer data) {
     gint64 start = g_get_monotonic_time();
 
     for (;;) {
-        /* Sleep up to 10 ms; wake early if renderer_free() signals the cond. */
-        gint64 deadline = g_get_monotonic_time() + 100 * G_TIME_SPAN_MILLISECOND;
+        /* Sleep up to ~16 ms (60 fps); wake early on resize or stop. */
+        gint64 deadline = g_get_monotonic_time() + 16 * G_TIME_SPAN_MILLISECOND;
 
         g_mutex_lock(&r->mutex);
         g_cond_wait_until(&r->cond, &r->mutex, deadline);

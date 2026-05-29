@@ -49,13 +49,6 @@ struct _FlutterSubsurfaceView {
     PFNGLBLITFRAMEBUFFERPROC p_glBlitFramebuffer;
     GLuint                   blit_read_fbo;
 
-    /* Resize synchronization: freeze the toplevel window until the
-       renderer delivers a frame at the expected size. */
-    gboolean has_presented;  /* TRUE after the first frame is shown */
-    gboolean awaiting_frame;
-    size_t   expected_width;
-    size_t   expected_height;
-
     /* Thread-safe pending-present state */
     GMutex   present_mutex;
     gboolean present_scheduled;
@@ -457,18 +450,6 @@ static void flutter_subsurface_view_size_allocate(GtkWidget     *widget,
         size_t pw = (size_t)allocation->width * self->scale;
         size_t ph = (size_t)allocation->height * self->scale;
         wl_egl_window_resize(self->egl_window, pw, ph, 0, 0);
-
-        /* Freeze the toplevel window so GDK won't commit the parent
-           surface until we have a subsurface frame at the new size.
-           Skip this before the first frame (window hasn't shown yet). */
-        if (self->has_presented && !self->awaiting_frame) {
-            GdkWindow *gdk_window = gtk_widget_get_window(toplevel);
-            if (gdk_window)
-                gdk_window_freeze_updates(gdk_window);
-            self->awaiting_frame = TRUE;
-        }
-        self->expected_width  = pw;
-        self->expected_height = ph;
     }
 }
 
@@ -564,20 +545,6 @@ static gboolean do_present(gpointer data) {
             wl_egl_window_resize(self->egl_window, width, height, 0, 0);
 
         render_texture(self, texture_id, texture_format, width, height);
-
-        self->has_presented = TRUE;
-
-        /* If we were waiting for a correctly-sized frame after a resize,
-           thaw the toplevel window so GTK can commit the parent surface
-           atomically with our new subsurface content. */
-        if (self->awaiting_frame &&
-            width == self->expected_width && height == self->expected_height) {
-            self->awaiting_frame = FALSE;
-            GtkWidget *toplevel = gtk_widget_get_toplevel(GTK_WIDGET(self));
-            GdkWindow *gdk_window = gtk_widget_get_window(toplevel);
-            if (gdk_window)
-                gdk_window_thaw_updates(gdk_window);
-        }
 
         /* Drive a parent-surface commit so the compositor applies our
            cached subsurface commit atomically (sync mode). */
