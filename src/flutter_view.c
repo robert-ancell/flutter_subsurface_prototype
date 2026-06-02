@@ -145,18 +145,6 @@ static void render_clear(FlutterView *self, size_t width, size_t height) {
                    EGL_NO_CONTEXT);
 }
 
-/* Blit a texture to the EGL surface and swap. */
-static void render_texture(FlutterView *self,
-                            GLuint texture_id,
-                            size_t width, size_t height) {
-    eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
-                   self->egl_context);
-
-    flutter_gl_compositor_blit(self->gl_compositor, texture_id, width, height);
-
-    eglSwapBuffers(self->egl_display, self->egl_surface);
-}
-
 /* ── GtkWidget vfuncs ─────────────────────────────────────────────────────── */
 
 static void realize_subsurface(FlutterView *self, GtkWidget *widget) {
@@ -430,7 +418,10 @@ static void present_subsurface(FlutterView *self,
     if ((size_t)cur_w != width || (size_t)cur_h != height)
         wl_egl_window_resize(self->egl_window, width, height, 0, 0);
 
-    render_texture(self, texture_id, width, height);
+    eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
+                   self->egl_context);
+    flutter_gl_compositor_blit(self->gl_compositor, texture_id, width, height);
+    eglSwapBuffers(self->egl_display, self->egl_surface);
 
     /* Restore the renderer context. */
     flutter_gl_compositor_make_current(self->gl_compositor);
