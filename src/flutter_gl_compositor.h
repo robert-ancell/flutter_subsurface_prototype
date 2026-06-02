@@ -4,13 +4,9 @@
 #include <GLES2/gl2.h>
 #include <glib.h>
 
-typedef struct _FlutterGLCompositor FlutterGLCompositor;
+#include "embedder.h"
 
-typedef struct {
-    GLuint texture;
-    size_t width;
-    size_t height;
-} FlutterBackingStore;
+typedef struct _FlutterGLCompositor FlutterGLCompositor;
 
 /**
  * flutter_gl_compositor_new:
