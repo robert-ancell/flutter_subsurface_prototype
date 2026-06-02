@@ -118,21 +118,6 @@ static gboolean setup_blit(FlutterGLCompositor *self) {
     return TRUE;
 }
 
-static void teardown_blit(FlutterGLCompositor *self) {
-    if (self->blit_read_fbo) {
-        glDeleteFramebuffers(1, &self->blit_read_fbo);
-        self->blit_read_fbo = 0;
-    }
-    if (self->gl_vbo) {
-        glDeleteBuffers(1, &self->gl_vbo);
-        self->gl_vbo = 0;
-    }
-    if (self->gl_program) {
-        glDeleteProgram(self->gl_program);
-        self->gl_program = 0;
-    }
-}
-
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
 FlutterGLCompositor *flutter_gl_compositor_new(EGLDisplay egl_display,
@@ -199,7 +184,18 @@ void flutter_gl_compositor_free(FlutterGLCompositor *self) {
     if (!self)
         return;
 
-    teardown_blit(self);
+    if (self->blit_read_fbo) {
+        glDeleteFramebuffers(1, &self->blit_read_fbo);
+        self->blit_read_fbo = 0;
+    }
+    if (self->gl_vbo) {
+        glDeleteBuffers(1, &self->gl_vbo);
+        self->gl_vbo = 0;
+    }
+    if (self->gl_program) {
+        glDeleteProgram(self->gl_program);
+        self->gl_program = 0;
+    }
 
     if (self->renderer_egl_surface != EGL_NO_SURFACE)
         eglDestroySurface(self->egl_display, self->renderer_egl_surface);
