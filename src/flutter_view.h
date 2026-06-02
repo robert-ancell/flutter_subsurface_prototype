@@ -4,21 +4,9 @@
 #include <GLES2/gl2.h>
 #include <gtk/gtk.h>
 
-G_BEGIN_DECLS
+#include "flutter_gl_compositor.h"
 
-/**
- * FlutterBackingStore:
- * @texture: OpenGL ES 2 texture name
- * @width: width of the texture in pixels
- * @height: height of the texture in pixels
- *
- * An off-screen render target managed by a #FlutterView.
- */
-typedef struct {
-    GLuint texture;
-    size_t width;
-    size_t height;
-} FlutterBackingStore;
+G_BEGIN_DECLS
 
 /**
  * FlutterViewResizeFunc:
