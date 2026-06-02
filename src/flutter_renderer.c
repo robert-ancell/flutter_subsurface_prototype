@@ -1,6 +1,6 @@
 #include "flutter_renderer.h"
 
-G_DEFINE_INTERFACE(FlutterRenderer, flutter_renderer, GTK_TYPE_WIDGET)
+G_DEFINE_INTERFACE(FlutterRenderer, flutter_renderer, G_TYPE_OBJECT)
 
 static void flutter_renderer_default_init(FlutterRendererInterface *iface G_GNUC_UNUSED) {
 }

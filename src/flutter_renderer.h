@@ -1,6 +1,6 @@
 #pragma once
 
-#include <gtk/gtk.h>
+#include <glib-object.h>
 
 #include "embedder.h"
 
@@ -21,7 +21,7 @@ typedef void (*FlutterRendererResizeFunc)(size_t   width,
                                           gpointer user_data);
 
 #define FLUTTER_TYPE_RENDERER (flutter_renderer_get_type())
-G_DECLARE_INTERFACE(FlutterRenderer, flutter_renderer, FLUTTER, RENDERER, GtkWidget)
+G_DECLARE_INTERFACE(FlutterRenderer, flutter_renderer, FLUTTER, RENDERER, GObject)
 
 struct _FlutterRendererInterface {
     GTypeInterface parent_iface;
