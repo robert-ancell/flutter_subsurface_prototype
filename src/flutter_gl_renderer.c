@@ -23,6 +23,12 @@ struct _FlutterGLRenderer {
     size_t   present_width;
     size_t   present_height;
 
+    /* Local texture copy resources (render thread only) */
+    GLuint   copy_texture;
+    GLuint   copy_fbo;
+    size_t   copy_width;
+    size_t   copy_height;
+
     FlutterGLCompositor *gl_compositor;
     FlutterViewResize   *resize;
 };
@@ -79,6 +85,17 @@ static void flutter_gl_renderer_unrealize(GtkWidget *widget) {
     self->has_frame = FALSE;
     self->present_texture = 0;
     g_mutex_unlock(&self->present_mutex);
+
+    if (self->copy_fbo) {
+        glDeleteFramebuffers(1, &self->copy_fbo);
+        self->copy_fbo = 0;
+    }
+    if (self->copy_texture) {
+        glDeleteTextures(1, &self->copy_texture);
+        self->copy_texture = 0;
+    }
+    self->copy_width = 0;
+    self->copy_height = 0;
 
     if (self->gl_compositor) {
         flutter_gl_compositor_free(self->gl_compositor);
@@ -197,9 +214,41 @@ static void flutter_gl_renderer_present_impl(FlutterRenderer     *renderer,
     size_t width  = backing_store->width;
     size_t height = backing_store->height;
 
+    /* Reallocate copy texture if size changed. */
+    if (self->copy_width != width || self->copy_height != height) {
+        if (self->copy_texture)
+            glDeleteTextures(1, &self->copy_texture);
+        if (self->copy_fbo)
+            glDeleteFramebuffers(1, &self->copy_fbo);
+
+        glGenTextures(1, &self->copy_texture);
+        glBindTexture(GL_TEXTURE_2D, self->copy_texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
+                     (GLsizei)width, (GLsizei)height,
+                     0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        glGenFramebuffers(1, &self->copy_fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, self->copy_fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, self->copy_texture, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        self->copy_width  = width;
+        self->copy_height = height;
+    }
+
+    /* Blit the source texture into our copy. */
+    glBindFramebuffer(GL_FRAMEBUFFER, self->copy_fbo);
+    flutter_gl_compositor_blit(self->gl_compositor,
+                               backing_store->opengl.texture, width, height);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
     g_mutex_lock(&self->present_mutex);
 
-    self->present_texture = backing_store->opengl.texture;
+    self->present_texture = self->copy_texture;
     self->present_width   = width;
     self->present_height  = height;
     self->has_frame       = TRUE;
