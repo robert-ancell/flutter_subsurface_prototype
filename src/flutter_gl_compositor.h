@@ -49,6 +49,33 @@ gboolean flutter_gl_compositor_make_current(FlutterGLCompositor *compositor);
 void flutter_gl_compositor_clear_current(FlutterGLCompositor *compositor);
 
 /**
+ * flutter_gl_compositor_setup_blit:
+ *
+ * Sets up GL resources for blitting textures to the default framebuffer.
+ * Must be called with an appropriate EGL context current.
+ * Uses glBlitFramebuffer when available, otherwise compiles a shader.
+ */
+gboolean flutter_gl_compositor_setup_blit(FlutterGLCompositor *compositor);
+
+/**
+ * flutter_gl_compositor_teardown_blit:
+ *
+ * Releases GL blit resources. Must be called with the same EGL context
+ * that was current during setup_blit.
+ */
+void flutter_gl_compositor_teardown_blit(FlutterGLCompositor *compositor);
+
+/**
+ * flutter_gl_compositor_blit:
+ *
+ * Blits a texture to the default framebuffer (framebuffer 0).
+ * The appropriate EGL context must be current.
+ */
+void flutter_gl_compositor_blit(FlutterGLCompositor *compositor,
+                                GLuint texture_id,
+                                size_t width, size_t height);
+
+/**
  * flutter_gl_compositor_create_backing_store:
  *
  * Creates an OpenGL texture to use as a render target.
