@@ -157,13 +157,18 @@ static void flutter_software_renderer_present_impl(FlutterRenderer     *renderer
 
     size_t width  = backing_store->width;
     size_t height = backing_store->height;
+    int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, (int)width);
+    size_t buf_size = (size_t)stride * height;
 
-    /* Create a cairo surface from the pixel buffer (ARGB32 premultiplied). */
+    /* Copy the pixel data — the backing store buffer may be overwritten
+       by the render thread after this function returns. */
+    void *copy = g_memdup2(backing_store->software.buffer, buf_size);
+
     cairo_surface_t *surface = cairo_image_surface_create_for_data(
-        backing_store->software.buffer,
-        CAIRO_FORMAT_ARGB32,
-        (int)width, (int)height,
-        cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, (int)width));
+        copy, CAIRO_FORMAT_ARGB32,
+        (int)width, (int)height, stride);
+    static cairo_user_data_key_t buf_key;
+    cairo_surface_set_user_data(surface, &buf_key, copy, g_free);
 
     g_mutex_lock(&self->present_mutex);
 
