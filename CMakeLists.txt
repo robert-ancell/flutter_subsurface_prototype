@@ -15,6 +15,7 @@ add_executable(flutter-subsurface-prototype
     src/main.c
     src/renderer.c
     src/flutter_view.c
+    src/flutter_view_resize.c
     src/flutter_gl_compositor.c
     src/flutter_subsurface.c
 )

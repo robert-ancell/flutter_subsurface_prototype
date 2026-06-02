@@ -7,6 +7,7 @@
 #include <wayland-egl.h>
 
 #include "flutter_subsurface.h"
+#include "flutter_view_resize.h"
 
 struct _FlutterView {
     GtkDrawingArea parent_instance;
@@ -40,14 +41,7 @@ struct _FlutterView {
     /* ── Shared ──────────────────────────────────────────────────────────── */
 
     FlutterGLCompositor *gl_compositor;
-
-    /* Resize synchronization: size_allocate blocks until the renderer
-       delivers a frame at the new size. */
-    GMutex   resize_mutex;
-    GCond    resize_cond;
-    gboolean resize_done;
-    size_t   resize_expected_width;
-    size_t   resize_expected_height;
+    FlutterViewResize   *resize;
 };
 
 G_DEFINE_TYPE(FlutterView, flutter_view, GTK_TYPE_DRAWING_AREA)
@@ -281,24 +275,12 @@ static void flutter_view_size_allocate(GtkWidget     *widget,
     }
 
     /* Block until the renderer delivers a frame at the new size. */
-    g_mutex_lock(&self->resize_mutex);
-    self->resize_done = FALSE;
-    self->resize_expected_width = pw;
-    self->resize_expected_height = ph;
-    g_mutex_unlock(&self->resize_mutex);
-
     if (self->resize_func)
         self->resize_func((size_t)allocation->width,
                           (size_t)allocation->height,
                           scale, self->resize_data);
 
-    gint64 deadline = g_get_monotonic_time() + 100 * G_TIME_SPAN_MILLISECOND;
-    g_mutex_lock(&self->resize_mutex);
-    while (!self->resize_done) {
-        if (!g_cond_wait_until(&self->resize_cond, &self->resize_mutex, deadline))
-            break;
-    }
-    g_mutex_unlock(&self->resize_mutex);
+    flutter_view_resize_wait(self->resize, pw, ph);
 }
 
 static gboolean flutter_view_draw(GtkWidget *widget, cairo_t *cr) {
@@ -346,8 +328,7 @@ static void flutter_view_get_preferred_height(GtkWidget *widget G_GNUC_UNUSED,
 static void flutter_view_finalize(GObject *object) {
     FlutterView *self = FLUTTER_VIEW(object);
 
-    g_mutex_clear(&self->resize_mutex);
-    g_cond_clear(&self->resize_cond);
+    flutter_view_resize_free(self->resize);
     g_mutex_clear(&self->present_mutex);
 
     G_OBJECT_CLASS(flutter_view_parent_class)->finalize(object);
@@ -371,8 +352,7 @@ static void flutter_view_init(FlutterView *self) {
     self->egl_display = EGL_NO_DISPLAY;
     self->egl_context = EGL_NO_CONTEXT;
     self->egl_surface = EGL_NO_SURFACE;
-    g_mutex_init(&self->resize_mutex);
-    g_cond_init(&self->resize_cond);
+    self->resize = flutter_view_resize_new();
     g_mutex_init(&self->present_mutex);
 }
 
@@ -426,15 +406,7 @@ static void present_subsurface(FlutterView *self,
     /* Restore the renderer context. */
     flutter_gl_compositor_make_current(self->gl_compositor);
 
-    /* Signal any blocked resize if this frame matches the expected size. */
-    g_mutex_lock(&self->resize_mutex);
-    if (!self->resize_done &&
-        width == self->resize_expected_width &&
-        height == self->resize_expected_height) {
-        self->resize_done = TRUE;
-        g_cond_signal(&self->resize_cond);
-    }
-    g_mutex_unlock(&self->resize_mutex);
+    flutter_view_resize_notify(self->resize, width, height);
 
     /* Drive a parent-surface commit (sync mode) from the main thread. */
     g_object_ref(self);
@@ -458,15 +430,7 @@ static void present_gl(FlutterView *self,
 
     g_mutex_unlock(&self->present_mutex);
 
-    /* Signal any blocked resize if this frame matches the expected size. */
-    g_mutex_lock(&self->resize_mutex);
-    if (!self->resize_done &&
-        width == self->resize_expected_width &&
-        height == self->resize_expected_height) {
-        self->resize_done = TRUE;
-        g_cond_signal(&self->resize_cond);
-    }
-    g_mutex_unlock(&self->resize_mutex);
+    flutter_view_resize_notify(self->resize, width, height);
 
     if (!was_scheduled)
         g_main_context_invoke(NULL, queue_draw_idle, self);
