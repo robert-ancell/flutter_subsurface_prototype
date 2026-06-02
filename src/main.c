@@ -1,7 +1,9 @@
 #include <gtk/gtk.h>
 
 #include "renderer.h"
-#include "flutter_view.h"
+#include "flutter_renderer.h"
+#include "flutter_gl_renderer.h"
+#include "flutter_subsurface_renderer.h"
 
 /* ── Command-line options ─────────────────────────────────────────────────── */
 
@@ -43,12 +45,16 @@ static void activate(GtkApplication *app, gpointer user_data G_GNUC_UNUSED) {
 
     AppData *app_data = g_new0(AppData, 1);
 
-    GtkWidget *widget = flutter_view_new(opt_subsurface, on_resize, app_data);
+    GtkWidget *widget;
+    if (opt_subsurface)
+        widget = flutter_subsurface_renderer_new(on_resize, app_data);
+    else
+        widget = flutter_gl_renderer_new(on_resize, app_data);
     gtk_container_add(GTK_CONTAINER(window), widget);
 
     gtk_widget_show_all(window);
 
-    app_data->renderer = renderer_new(FLUTTER_VIEW(widget));
+    app_data->renderer = renderer_new(FLUTTER_RENDERER(widget));
 
     g_signal_connect(window, "delete-event",
                      G_CALLBACK(on_delete_event), app_data);

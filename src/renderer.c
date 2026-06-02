@@ -5,7 +5,7 @@
 #include <math.h>
 
 struct _Renderer {
-    FlutterView *widget;
+    FlutterRenderer *renderer;
 
     size_t width;
     size_t height;
@@ -54,10 +54,10 @@ static GLuint compile_shader(GLenum type, const char *src) {
    Any existing FBO and backing store are released first. */
 static gboolean create_fbo(Renderer *r) {
     if (r->fbo) { glDeleteFramebuffers(1, &r->fbo); r->fbo = 0; }
-    flutter_view_collect_backing_store(r->widget, r->backing_store);
+    flutter_renderer_collect_backing_store(r->renderer, r->backing_store);
 
-    r->backing_store = flutter_view_create_backing_store(
-        r->widget, r->width, r->height);
+    r->backing_store = flutter_renderer_create_backing_store(
+        r->renderer, r->width, r->height);
     if (!r->backing_store)
         return FALSE;
 
@@ -143,7 +143,7 @@ static gboolean setup_gl(Renderer *r) {
 
 static void teardown_gl(Renderer *r) {
     if (r->fbo) { glDeleteFramebuffers(1, &r->fbo); r->fbo = 0; }
-    flutter_view_collect_backing_store(r->widget, r->backing_store);
+    flutter_renderer_collect_backing_store(r->renderer, r->backing_store);
     r->backing_store = NULL;
     if (r->vbo)     { glDeleteBuffers(1, &r->vbo);    r->vbo     = 0; }
     if (r->program) { glDeleteProgram(r->program);    r->program = 0; }
@@ -185,8 +185,8 @@ static void render_frame(Renderer *r, float angle) {
 static gpointer renderer_thread_func(gpointer data) {
     Renderer *r = data;
 
-    if (!flutter_view_make_current(r->widget)) {
-        g_warning("Renderer: flutter_view_make_current failed, thread exiting");
+    if (!flutter_renderer_make_current(r->renderer)) {
+        g_warning("Renderer: flutter_renderer_make_current failed, thread exiting");
         return NULL;
     }
 
@@ -225,27 +225,27 @@ static gpointer renderer_thread_func(gpointer data) {
         float angle   = elapsed * ((float)G_PI * 2.0f / 4.0f); /* one rotation per 4 s */
 
         render_frame(r, angle);
-        flutter_view_present(r->widget,
+        flutter_renderer_present(r->renderer,
                              r->backing_store->texture, GL_RGBA,
                              r->backing_store->width,
                              r->backing_store->height);
     }
 
     teardown_gl(r);
-    flutter_view_clear_current(r->widget);
+    flutter_renderer_clear_current(r->renderer);
     return NULL;
 }
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
-Renderer *renderer_new(FlutterView *widget) {
+Renderer *renderer_new(FlutterRenderer *renderer) {
     GtkAllocation alloc;
-    gtk_widget_get_allocation(GTK_WIDGET(widget), &alloc);
+    gtk_widget_get_allocation(GTK_WIDGET(renderer), &alloc);
 
-    gint scale = gtk_widget_get_scale_factor(GTK_WIDGET(widget));
+    gint scale = gtk_widget_get_scale_factor(GTK_WIDGET(renderer));
 
     Renderer *r = g_new0(Renderer, 1);
-    r->widget  = widget;
+    r->renderer = renderer;
     r->width   = (size_t)alloc.width * (size_t)scale;
     r->height  = (size_t)alloc.height * (size_t)scale;
     r->running = TRUE;
