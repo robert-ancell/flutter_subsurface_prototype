@@ -16,6 +16,10 @@ struct _FlutterSoftwareRenderer {
     gboolean          has_frame;
     cairo_surface_t  *present_surface;
 
+    /* Managed copy buffer — reused across frames, reallocated on resize */
+    void   *present_buffer;
+    size_t  present_buf_size;
+
     FlutterViewResize *resize;
 };
 
@@ -69,26 +73,20 @@ static gboolean flutter_software_renderer_draw(GtkWidget *widget, cairo_t *cr) {
     FlutterSoftwareRenderer *self = FLUTTER_SOFTWARE_RENDERER(widget);
 
     g_mutex_lock(&self->present_mutex);
-    gboolean has_frame = self->has_frame;
-    cairo_surface_t *surface = self->present_surface;
-    if (surface)
-        cairo_surface_reference(surface);
-    g_mutex_unlock(&self->present_mutex);
 
-    if (!has_frame || !surface) {
+    if (!self->has_frame || !self->present_surface) {
+        g_mutex_unlock(&self->present_mutex);
         cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
         cairo_paint(cr);
-        if (surface)
-            cairo_surface_destroy(surface);
         return TRUE;
     }
 
     gint scale = gtk_widget_get_scale_factor(widget);
     cairo_scale(cr, 1.0 / scale, 1.0 / scale);
-    cairo_set_source_surface(cr, surface, 0, 0);
+    cairo_set_source_surface(cr, self->present_surface, 0, 0);
     cairo_paint(cr);
 
-    cairo_surface_destroy(surface);
+    g_mutex_unlock(&self->present_mutex);
     return TRUE;
 }
 
@@ -110,6 +108,7 @@ static void flutter_software_renderer_finalize(GObject *object) {
     flutter_view_resize_free(self->resize);
     if (self->present_surface)
         cairo_surface_destroy(self->present_surface);
+    g_free(self->present_buffer);
     g_mutex_clear(&self->present_mutex);
 
     G_OBJECT_CLASS(flutter_software_renderer_parent_class)->finalize(object);
@@ -160,22 +159,25 @@ static void flutter_software_renderer_present_impl(FlutterRenderer     *renderer
     int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, (int)width);
     size_t buf_size = (size_t)stride * height;
 
-    /* Copy the pixel data — the backing store buffer may be overwritten
-       by the render thread after this function returns. */
-    void *copy = g_memdup2(backing_store->software.buffer, buf_size);
-
-    cairo_surface_t *surface = cairo_image_surface_create_for_data(
-        copy, CAIRO_FORMAT_ARGB32,
-        (int)width, (int)height, stride);
-    static cairo_user_data_key_t buf_key;
-    cairo_surface_set_user_data(surface, &buf_key, copy, g_free);
-
     g_mutex_lock(&self->present_mutex);
 
-    if (self->present_surface)
-        cairo_surface_destroy(self->present_surface);
-    self->present_surface = surface;
-    self->has_frame       = TRUE;
+    /* Reallocate the managed buffer and surface only if the size changed. */
+    if (self->present_buf_size != buf_size) {
+        if (self->present_surface) {
+            cairo_surface_destroy(self->present_surface);
+            self->present_surface = NULL;
+        }
+        g_free(self->present_buffer);
+        self->present_buffer = g_malloc(buf_size);
+        self->present_buf_size = buf_size;
+        self->present_surface = cairo_image_surface_create_for_data(
+            self->present_buffer, CAIRO_FORMAT_ARGB32,
+            (int)width, (int)height, stride);
+    }
+
+    memcpy(self->present_buffer, backing_store->software.buffer, buf_size);
+    cairo_surface_mark_dirty(self->present_surface);
+    self->has_frame = TRUE;
 
     gboolean was_scheduled = self->present_scheduled;
     if (!was_scheduled) {
