@@ -209,10 +209,6 @@ void flutter_gl_compositor_free(FlutterGLCompositor *self) {
     g_free(self);
 }
 
-EGLDisplay flutter_gl_compositor_get_egl_display(FlutterGLCompositor *self) {
-    return self->egl_display;
-}
-
 gboolean flutter_gl_compositor_make_current(FlutterGLCompositor *self) {
     return eglMakeCurrent(self->egl_display, self->renderer_egl_surface,
                           self->renderer_egl_surface,

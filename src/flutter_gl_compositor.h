@@ -30,13 +30,6 @@ FlutterGLCompositor *flutter_gl_compositor_new(EGLDisplay egl_display,
 void flutter_gl_compositor_free(FlutterGLCompositor *compositor);
 
 /**
- * flutter_gl_compositor_get_egl_display:
- *
- * Returns the EGL display used by this compositor.
- */
-EGLDisplay flutter_gl_compositor_get_egl_display(FlutterGLCompositor *compositor);
-
-/**
  * flutter_gl_compositor_make_current:
  *
  * Makes the renderer EGL context current on the calling thread.
