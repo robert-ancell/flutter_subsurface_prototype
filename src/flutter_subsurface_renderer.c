@@ -182,8 +182,7 @@ static void flutter_subsurface_renderer_unrealize(GtkWidget *widget) {
         self->egl_window = NULL;
     }
 
-    flutter_subsurface_free(self->subsurface);
-    self->subsurface = NULL;
+    g_clear_object(&self->subsurface);
 
     GTK_WIDGET_CLASS(flutter_subsurface_renderer_parent_class)->unrealize(widget);
 }

@@ -4,11 +4,15 @@
 #include <string.h>
 
 struct _FlutterSubsurface {
+    GObject parent_instance;
+
     struct wl_compositor    *compositor;
     struct wl_subcompositor *subcompositor;
     struct wl_surface       *surface;
     struct wl_subsurface    *subsurface;
 };
+
+G_DEFINE_TYPE(FlutterSubsurface, flutter_subsurface, G_TYPE_OBJECT)
 
 /* ── Wayland registry ─────────────────────────────────────────────────────── */
 
@@ -34,6 +38,39 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = registry_global_remove,
 };
 
+/* ── GObject vfuncs ───────────────────────────────────────────────────────── */
+
+static void flutter_subsurface_dispose(GObject *object) {
+    FlutterSubsurface *self = FLUTTER_SUBSURFACE(object);
+
+    if (self->subsurface) {
+        wl_subsurface_destroy(self->subsurface);
+        self->subsurface = NULL;
+    }
+    if (self->surface) {
+        wl_surface_destroy(self->surface);
+        self->surface = NULL;
+    }
+    if (self->subcompositor) {
+        wl_subcompositor_destroy(self->subcompositor);
+        self->subcompositor = NULL;
+    }
+    if (self->compositor) {
+        wl_compositor_destroy(self->compositor);
+        self->compositor = NULL;
+    }
+
+    G_OBJECT_CLASS(flutter_subsurface_parent_class)->dispose(object);
+}
+
+static void flutter_subsurface_class_init(FlutterSubsurfaceClass *klass) {
+    GObjectClass *object_class = G_OBJECT_CLASS(klass);
+    object_class->dispose = flutter_subsurface_dispose;
+}
+
+static void flutter_subsurface_init(FlutterSubsurface *self G_GNUC_UNUSED) {
+}
+
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
 FlutterSubsurface *flutter_subsurface_new(GtkWidget *widget) {
@@ -43,7 +80,7 @@ FlutterSubsurface *flutter_subsurface_new(GtkWidget *widget) {
         return NULL;
     }
 
-    FlutterSubsurface *self = g_new0(FlutterSubsurface, 1);
+    FlutterSubsurface *self = g_object_new(FLUTTER_TYPE_SUBSURFACE, NULL);
 
     struct wl_display *display =
         gdk_wayland_display_get_wl_display(gdk_display);
@@ -57,7 +94,7 @@ FlutterSubsurface *flutter_subsurface_new(GtkWidget *widget) {
         g_warning("Required Wayland globals not available "
                   "(wl_compositor=%p, wl_subcompositor=%p)",
                   (void *)self->compositor, (void *)self->subcompositor);
-        flutter_subsurface_free(self);
+        g_object_unref(self);
         return NULL;
     }
 
@@ -77,30 +114,6 @@ FlutterSubsurface *flutter_subsurface_new(GtkWidget *widget) {
     wl_subsurface_set_position(self->subsurface, x, y);
 
     return self;
-}
-
-void flutter_subsurface_free(FlutterSubsurface *self) {
-    if (!self)
-        return;
-
-    if (self->subsurface) {
-        wl_subsurface_destroy(self->subsurface);
-        self->subsurface = NULL;
-    }
-    if (self->surface) {
-        wl_surface_destroy(self->surface);
-        self->surface = NULL;
-    }
-    if (self->subcompositor) {
-        wl_subcompositor_destroy(self->subcompositor);
-        self->subcompositor = NULL;
-    }
-    if (self->compositor) {
-        wl_compositor_destroy(self->compositor);
-        self->compositor = NULL;
-    }
-
-    g_free(self);
 }
 
 struct wl_surface *flutter_subsurface_get_surface(FlutterSubsurface *self) {

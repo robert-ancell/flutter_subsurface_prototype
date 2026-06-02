@@ -1,10 +1,13 @@
 #pragma once
 
-#include <glib.h>
+#include <glib-object.h>
 #include <gtk/gtk.h>
 #include <wayland-client.h>
 
-typedef struct _FlutterSubsurface FlutterSubsurface;
+G_BEGIN_DECLS
+
+#define FLUTTER_TYPE_SUBSURFACE (flutter_subsurface_get_type())
+G_DECLARE_FINAL_TYPE(FlutterSubsurface, flutter_subsurface, FLUTTER, SUBSURFACE, GObject)
 
 /**
  * flutter_subsurface_new:
@@ -13,11 +16,9 @@ typedef struct _FlutterSubsurface FlutterSubsurface;
  * Creates a Wayland subsurface attached to the parent surface of
  * @widget's toplevel window.
  *
- * Returns: a new subsurface, or %NULL on failure.
+ * Returns: (transfer full): a new subsurface, or %NULL on failure.
  */
 FlutterSubsurface *flutter_subsurface_new(GtkWidget *widget);
-
-void flutter_subsurface_free(FlutterSubsurface *subsurface);
 
 /**
  * flutter_subsurface_get_surface:
@@ -33,3 +34,5 @@ struct wl_surface *flutter_subsurface_get_surface(FlutterSubsurface *subsurface)
  */
 void flutter_subsurface_set_position(FlutterSubsurface *subsurface,
                                      gint x, gint y);
+
+G_END_DECLS
