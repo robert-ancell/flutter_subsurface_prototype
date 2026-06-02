@@ -3,9 +3,10 @@
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 #include <gdk/gdkwayland.h>
-#include <string.h>
 #include <wayland-client.h>
 #include <wayland-egl.h>
+
+#include "flutter_subsurface.h"
 
 struct _FlutterView {
     GtkDrawingArea parent_instance;
@@ -17,10 +18,7 @@ struct _FlutterView {
 
     /* ── Wayland subsurface mode fields ──────────────────────────────────── */
 
-    struct wl_compositor    *compositor;
-    struct wl_subcompositor *subcompositor;
-    struct wl_surface       *surface;
-    struct wl_subsurface    *subsurface;
+    FlutterSubsurface *subsurface;
 
     struct wl_egl_window *egl_window;
     EGLDisplay            egl_display;
@@ -53,30 +51,6 @@ struct _FlutterView {
 };
 
 G_DEFINE_TYPE(FlutterView, flutter_view, GTK_TYPE_DRAWING_AREA)
-
-/* ── Wayland registry ─────────────────────────────────────────────────────── */
-
-static void registry_global(void *data, struct wl_registry *registry,
-                             uint32_t name, const char *interface,
-                             uint32_t version) {
-    FlutterView *self = data;
-    if (strcmp(interface, wl_compositor_interface.name) == 0) {
-        self->compositor = wl_registry_bind(
-            registry, name, &wl_compositor_interface, MIN(version, 4));
-    } else if (strcmp(interface, wl_subcompositor_interface.name) == 0) {
-        self->subcompositor = wl_registry_bind(
-            registry, name, &wl_subcompositor_interface, 1);
-    }
-}
-
-static void registry_global_remove(void *data G_GNUC_UNUSED,
-                                    struct wl_registry *registry G_GNUC_UNUSED,
-                                    uint32_t name G_GNUC_UNUSED) {}
-
-static const struct wl_registry_listener registry_listener = {
-    .global        = registry_global,
-    .global_remove = registry_global_remove,
-};
 
 /* ── EGL setup (subsurface mode) ──────────────────────────────────────────── */
 
@@ -122,7 +96,10 @@ static gboolean setup_egl(FlutterView *self, struct wl_display *display,
         return FALSE;
     }
 
-    self->egl_window = wl_egl_window_create(self->surface,
+    struct wl_surface *wl_surface =
+        flutter_subsurface_get_surface(self->subsurface);
+
+    self->egl_window = wl_egl_window_create(wl_surface,
                                              width * self->scale,
                                              height * self->scale);
     if (!self->egl_window) {
@@ -138,7 +115,7 @@ static gboolean setup_egl(FlutterView *self, struct wl_display *display,
         return FALSE;
     }
 
-    wl_surface_set_buffer_scale(self->surface, self->scale);
+    wl_surface_set_buffer_scale(wl_surface, self->scale);
 
     eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
                    self->egl_context);
@@ -183,45 +160,17 @@ static void render_texture(FlutterView *self,
 /* ── GtkWidget vfuncs ─────────────────────────────────────────────────────── */
 
 static void realize_subsurface(FlutterView *self, GtkWidget *widget) {
-    GdkDisplay *gdk_display = gtk_widget_get_display(widget);
-    if (!GDK_IS_WAYLAND_DISPLAY(gdk_display)) {
-        g_warning("FlutterView requires a Wayland display");
+    self->subsurface = flutter_subsurface_new(widget);
+    if (!self->subsurface)
         return;
-    }
-
-    struct wl_display *display =
-        gdk_wayland_display_get_wl_display(gdk_display);
-
-    struct wl_registry *registry = wl_display_get_registry(display);
-    wl_registry_add_listener(registry, &registry_listener, self);
-    wl_display_roundtrip(display);
-    wl_registry_destroy(registry);
-
-    if (!self->compositor || !self->subcompositor) {
-        g_warning("Required Wayland globals not available "
-                  "(wl_compositor=%p, wl_subcompositor=%p)",
-                  (void *)self->compositor, (void *)self->subcompositor);
-        return;
-    }
-
-    GtkWidget *toplevel   = gtk_widget_get_toplevel(widget);
-    GdkWindow *gdk_window = gtk_widget_get_window(toplevel);
-    struct wl_surface *parent_surface =
-        gdk_wayland_window_get_wl_surface(gdk_window);
-
-    self->surface   = wl_compositor_create_surface(self->compositor);
-    self->subsurface = wl_subcompositor_get_subsurface(
-        self->subcompositor, self->surface, parent_surface);
-
-    wl_subsurface_set_sync(self->subsurface);
-
-    gint x, y;
-    gtk_widget_translate_coordinates(widget, toplevel, 0, 0, &x, &y);
-    wl_subsurface_set_position(self->subsurface, x, y);
 
     GtkAllocation alloc;
     gtk_widget_get_allocation(widget, &alloc);
     self->scale = gtk_widget_get_scale_factor(widget);
+
+    GdkDisplay *gdk_display = gtk_widget_get_display(widget);
+    struct wl_display *display =
+        gdk_wayland_display_get_wl_display(gdk_display);
 
     if (!setup_egl(self, display, alloc.width, alloc.height))
         return;
@@ -312,14 +261,8 @@ static void flutter_view_unrealize(GtkWidget *widget) {
             self->egl_window = NULL;
         }
 
-        if (self->subsurface) {
-            wl_subsurface_destroy(self->subsurface);
-            self->subsurface = NULL;
-        }
-        if (self->surface) {
-            wl_surface_destroy(self->surface);
-            self->surface = NULL;
-        }
+        flutter_subsurface_free(self->subsurface);
+        self->subsurface = NULL;
     }
 
     GTK_WIDGET_CLASS(flutter_view_parent_class)->unrealize(widget);
@@ -343,7 +286,7 @@ static void flutter_view_size_allocate(GtkWidget     *widget,
         GtkWidget *toplevel = gtk_widget_get_toplevel(widget);
         gint x, y;
         gtk_widget_translate_coordinates(widget, toplevel, 0, 0, &x, &y);
-        wl_subsurface_set_position(self->subsurface, x, y);
+        flutter_subsurface_set_position(self->subsurface, x, y);
 
         if (self->egl_window)
             wl_egl_window_resize(self->egl_window, pw, ph, 0, 0);
@@ -418,15 +361,6 @@ static void flutter_view_finalize(GObject *object) {
     g_mutex_clear(&self->resize_mutex);
     g_cond_clear(&self->resize_cond);
     g_mutex_clear(&self->present_mutex);
-
-    if (self->subcompositor) {
-        wl_subcompositor_destroy(self->subcompositor);
-        self->subcompositor = NULL;
-    }
-    if (self->compositor) {
-        wl_compositor_destroy(self->compositor);
-        self->compositor = NULL;
-    }
 
     G_OBJECT_CLASS(flutter_view_parent_class)->finalize(object);
 }

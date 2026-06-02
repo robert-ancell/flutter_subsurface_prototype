@@ -16,6 +16,7 @@ add_executable(flutter-subsurface-prototype
     src/renderer.c
     src/flutter_view.c
     src/flutter_gl_compositor.c
+    src/flutter_subsurface.c
 )
 
 target_link_libraries(flutter-subsurface-prototype PRIVATE
