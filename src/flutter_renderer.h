@@ -4,7 +4,7 @@
 #include <GLES2/gl2.h>
 #include <gtk/gtk.h>
 
-#include "flutter_gl_compositor.h"
+#include "embedder.h"
 
 G_BEGIN_DECLS
 

@@ -4,6 +4,7 @@
 #include <GLES2/gl2.h>
 #include <gdk/gdkwayland.h>
 
+#include "flutter_gl_compositor.h"
 #include "flutter_view_resize.h"
 
 struct _FlutterGLRenderer {

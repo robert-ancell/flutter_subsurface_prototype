@@ -6,6 +6,7 @@
 #include <wayland-client.h>
 #include <wayland-egl.h>
 
+#include "flutter_gl_compositor.h"
 #include "flutter_subsurface.h"
 #include "flutter_view_resize.h"
 
