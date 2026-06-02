@@ -13,7 +13,6 @@ struct _FlutterView {
     GtkDrawingArea parent_instance;
 
     gboolean use_subsurface;
-    gint scale;
     FlutterViewResizeFunc resize_func;
     gpointer              resize_data;
 
@@ -49,7 +48,7 @@ G_DEFINE_TYPE(FlutterView, flutter_view, GTK_TYPE_DRAWING_AREA)
 /* ── EGL setup (subsurface mode) ──────────────────────────────────────────── */
 
 static gboolean setup_egl(FlutterView *self, struct wl_display *display,
-                           size_t width, size_t height) {
+                           size_t width, size_t height, gint scale) {
     self->egl_display = eglGetDisplay((EGLNativeDisplayType)display);
     if (self->egl_display == EGL_NO_DISPLAY) {
         g_warning("Failed to get EGL display");
@@ -94,8 +93,8 @@ static gboolean setup_egl(FlutterView *self, struct wl_display *display,
         flutter_subsurface_get_surface(self->subsurface);
 
     self->egl_window = wl_egl_window_create(wl_surface,
-                                             width * self->scale,
-                                             height * self->scale);
+                                             width * scale,
+                                             height * scale);
     if (!self->egl_window) {
         g_warning("Failed to create wl_egl_window");
         return FALSE;
@@ -109,7 +108,7 @@ static gboolean setup_egl(FlutterView *self, struct wl_display *display,
         return FALSE;
     }
 
-    wl_surface_set_buffer_scale(wl_surface, self->scale);
+    wl_surface_set_buffer_scale(wl_surface, scale);
 
     eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
                    self->egl_context);
@@ -148,17 +147,17 @@ static void realize_subsurface(FlutterView *self, GtkWidget *widget) {
 
     GtkAllocation alloc;
     gtk_widget_get_allocation(widget, &alloc);
-    self->scale = gtk_widget_get_scale_factor(widget);
+    gint scale = gtk_widget_get_scale_factor(widget);
 
     GdkDisplay *gdk_display = gtk_widget_get_display(widget);
     struct wl_display *display =
         gdk_wayland_display_get_wl_display(gdk_display);
 
-    if (!setup_egl(self, display, alloc.width, alloc.height))
+    if (!setup_egl(self, display, alloc.width, alloc.height, scale))
         return;
 
-    render_clear(self, (size_t)alloc.width * self->scale,
-                       (size_t)alloc.height * self->scale);
+    render_clear(self, (size_t)alloc.width * scale,
+                       (size_t)alloc.height * scale);
 }
 
 static void realize_gl(FlutterView *self, GtkWidget *widget) {
