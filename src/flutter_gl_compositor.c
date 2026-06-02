@@ -223,7 +223,6 @@ void flutter_gl_compositor_blit(FlutterGLCompositor *self,
         glBindFramebuffer(GL_READ_FRAMEBUFFER, self->blit_read_fbo);
         glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_2D, texture_id, 0);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         self->p_glBlitFramebuffer(0, 0, (GLint)width, (GLint)height,
                                   0, 0, (GLint)width, (GLint)height,
                                   GL_COLOR_BUFFER_BIT, GL_NEAREST);
