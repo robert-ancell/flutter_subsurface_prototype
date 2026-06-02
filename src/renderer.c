@@ -64,7 +64,7 @@ static gboolean create_fbo(Renderer *r) {
     glGenFramebuffers(1, &r->fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, r->fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, r->backing_store->texture, 0);
+                           GL_TEXTURE_2D, r->backing_store->opengl.texture, 0);
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -226,7 +226,7 @@ static gpointer renderer_thread_func(gpointer data) {
 
         render_frame(r, angle);
         flutter_renderer_present(r->renderer,
-                             r->backing_store->texture, GL_RGBA,
+                             r->backing_store->opengl.texture, GL_RGBA,
                              r->backing_store->width,
                              r->backing_store->height);
     }

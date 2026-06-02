@@ -256,11 +256,12 @@ FlutterBackingStore *flutter_gl_compositor_create_backing_store(
     size_t width, size_t height) {
 
     FlutterBackingStore *store = g_new0(FlutterBackingStore, 1);
+    store->type   = FLUTTER_BACKING_STORE_TYPE_OPENGL;
     store->width  = width;
     store->height = height;
 
-    glGenTextures(1, &store->texture);
-    glBindTexture(GL_TEXTURE_2D, store->texture);
+    glGenTextures(1, &store->opengl.texture);
+    glBindTexture(GL_TEXTURE_2D, store->opengl.texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
                  (GLsizei)width, (GLsizei)height,
                  0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
@@ -276,6 +277,6 @@ void flutter_gl_compositor_collect_backing_store(
     FlutterBackingStore *store) {
     if (!store)
         return;
-    glDeleteTextures(1, &store->texture);
+    glDeleteTextures(1, &store->opengl.texture);
     g_free(store);
 }
