@@ -134,11 +134,11 @@ static gboolean flutter_gl_renderer_draw(GtkWidget *widget, cairo_t *cr) {
     GLuint   texture   = self->present_texture;
     size_t   width     = self->present_width;
     size_t   height    = self->present_height;
-    g_mutex_unlock(&self->present_mutex);
 
     if (!has_frame || !self->gdk_gl_context) {
         cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
         cairo_paint(cr);
+        g_mutex_unlock(&self->present_mutex);
         return TRUE;
     }
 
@@ -148,6 +148,7 @@ static gboolean flutter_gl_renderer_draw(GtkWidget *widget, cairo_t *cr) {
     gdk_cairo_draw_from_gl(cr, gdk_window,
                            (int)texture, GL_TEXTURE, scale,
                            0, 0, (int)width, (int)height);
+    g_mutex_unlock(&self->present_mutex);
     return TRUE;
 }
 
@@ -240,13 +241,15 @@ static void flutter_gl_renderer_present_impl(FlutterRenderer     *renderer,
         self->copy_height = height;
     }
 
-    /* Blit the source texture into our copy. */
+    /* Blit the source texture into our copy under the mutex so the draw
+       callback cannot read the texture while we're writing to it. */
+    g_mutex_lock(&self->present_mutex);
+
     glBindFramebuffer(GL_FRAMEBUFFER, self->copy_fbo);
     flutter_gl_compositor_blit(self->gl_compositor,
                                backing_store->opengl.texture, width, height);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-    g_mutex_lock(&self->present_mutex);
+    glFinish();
 
     self->present_texture = self->copy_texture;
     self->present_width   = width;
