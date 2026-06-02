@@ -4,7 +4,7 @@
 #include <gtk/gtk.h>
 #include <math.h>
 
-struct _Renderer {
+struct _RendererGL {
     FlutterRenderer *renderer;
 
     size_t width;
@@ -43,7 +43,7 @@ static GLuint compile_shader(GLenum type, const char *src) {
     if (compile_status == GL_FALSE) {
         char log[512];
         glGetShaderInfoLog(sh, sizeof(log), NULL, log);
-        g_warning("Renderer shader compile error: %s", log);
+        g_warning("RendererGL shader compile error: %s", log);
         glDeleteShader(sh);
         return 0;
     }
@@ -52,7 +52,7 @@ static GLuint compile_shader(GLenum type, const char *src) {
 
 /* (Re)create the FBO and backing store at r->width × r->height.
    Any existing FBO and backing store are released first. */
-static gboolean create_fbo(Renderer *r) {
+static gboolean create_fbo(RendererGL *r) {
     if (r->fbo) { glDeleteFramebuffers(1, &r->fbo); r->fbo = 0; }
     flutter_renderer_collect_backing_store(r->renderer, r->backing_store);
 
@@ -69,13 +69,13 @@ static gboolean create_fbo(Renderer *r) {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     if (status != GL_FRAMEBUFFER_COMPLETE) {
-        g_warning("Renderer FBO incomplete (status 0x%x)", (unsigned)status);
+        g_warning("RendererGL FBO incomplete (status 0x%x)", (unsigned)status);
         return FALSE;
     }
     return TRUE;
 }
 
-static gboolean setup_gl(Renderer *r) {
+static gboolean setup_gl(RendererGL *r) {
     /* Vertex shader: rotate the triangle by u_angle radians around the
        origin, then pass interpolated per-vertex colour to the fragment
        shader. */
@@ -117,7 +117,7 @@ static gboolean setup_gl(Renderer *r) {
     if (!ok) {
         char log[512];
         glGetProgramInfoLog(r->program, sizeof(log), NULL, log);
-        g_warning("Renderer shader link error: %s", log);
+        g_warning("RendererGL shader link error: %s", log);
         glDeleteProgram(r->program);
         r->program = 0;
         return FALSE;
@@ -141,7 +141,7 @@ static gboolean setup_gl(Renderer *r) {
     return create_fbo(r);
 }
 
-static void teardown_gl(Renderer *r) {
+static void teardown_gl(RendererGL *r) {
     if (r->fbo) { glDeleteFramebuffers(1, &r->fbo); r->fbo = 0; }
     flutter_renderer_collect_backing_store(r->renderer, r->backing_store);
     r->backing_store = NULL;
@@ -149,7 +149,7 @@ static void teardown_gl(Renderer *r) {
     if (r->program) { glDeleteProgram(r->program);    r->program = 0; }
 }
 
-static void render_frame(Renderer *r, float angle) {
+static void render_frame(RendererGL *r, float angle) {
     glBindFramebuffer(GL_FRAMEBUFFER, r->fbo);
     glViewport(0, 0, (GLsizei)r->width, (GLsizei)r->height);
 
@@ -183,15 +183,15 @@ static void render_frame(Renderer *r, float angle) {
 /* ── Render thread ────────────────────────────────────────────────────────── */
 
 static gpointer renderer_thread_func(gpointer data) {
-    Renderer *r = data;
+    RendererGL *r = data;
 
     if (!flutter_renderer_make_current(r->renderer)) {
-        g_warning("Renderer: flutter_renderer_make_current failed, thread exiting");
+        g_warning("RendererGL: flutter_renderer_make_current failed, thread exiting");
         return NULL;
     }
 
     if (!setup_gl(r)) {
-        g_warning("Renderer: GL setup failed, thread exiting");
+        g_warning("RendererGL: GL setup failed, thread exiting");
         return NULL;
     }
 
@@ -235,13 +235,13 @@ static gpointer renderer_thread_func(gpointer data) {
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
-Renderer *renderer_new(FlutterRenderer *renderer) {
+RendererGL *renderer_gl_new(FlutterRenderer *renderer) {
     GtkAllocation alloc;
     gtk_widget_get_allocation(GTK_WIDGET(renderer), &alloc);
 
     gint scale = gtk_widget_get_scale_factor(GTK_WIDGET(renderer));
 
-    Renderer *r = g_new0(Renderer, 1);
+    RendererGL *r = g_new0(RendererGL, 1);
     r->renderer = renderer;
     r->width   = (size_t)alloc.width * (size_t)scale;
     r->height  = (size_t)alloc.height * (size_t)scale;
@@ -254,7 +254,7 @@ Renderer *renderer_new(FlutterRenderer *renderer) {
     return r;
 }
 
-void renderer_free(Renderer *r) {
+void renderer_gl_free(RendererGL *r) {
     if (!r)
         return;
 
@@ -271,7 +271,7 @@ void renderer_free(Renderer *r) {
     g_free(r);
 }
 
-void renderer_resize(Renderer *r, size_t width, size_t height, gint scale) {
+void renderer_gl_resize(RendererGL *r, size_t width, size_t height, gint scale) {
     g_mutex_lock(&r->mutex);
     r->pending_width  = width * (size_t)scale;
     r->pending_height = height * (size_t)scale;
