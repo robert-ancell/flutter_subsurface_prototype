@@ -1,5 +1,6 @@
 #include "flutter_gl_compositor.h"
 
+#include <stdio.h>
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 
@@ -52,9 +53,27 @@ static GLuint compile_shader(GLenum type, const char *src) {
 }
 
 static gboolean setup_blit(FlutterGLCompositor *self) {
-    /* Try to get glBlitFramebuffer (available in GLES 3.0+). */
-    self->p_glBlitFramebuffer = (PFNGLBLITFRAMEBUFFERPROC)
-        eglGetProcAddress("glBlitFramebuffer");
+    /* Only use glBlitFramebuffer if we have GLES 3.0+ or GL 3.0+. */
+    const char *version = (const char *)glGetString(GL_VERSION);
+    gboolean has_blit = FALSE;
+    if (version) {
+        if (g_str_has_prefix(version, "OpenGL ES 3") ||
+            g_str_has_prefix(version, "OpenGL ES 4")) {
+            has_blit = TRUE;
+        } else if (!g_str_has_prefix(version, "OpenGL ES")) {
+            /* Desktop GL — check major version >= 3 */
+            int major = 0;
+            sscanf(version, "%d", &major);
+            if (major >= 3)
+                has_blit = TRUE;
+        }
+    }
+
+    if (has_blit) {
+        self->p_glBlitFramebuffer = (PFNGLBLITFRAMEBUFFERPROC)
+            eglGetProcAddress("glBlitFramebuffer");
+    }
+
     if (self->p_glBlitFramebuffer) {
         glGenFramebuffers(1, &self->blit_read_fbo);
         return TRUE;
@@ -172,10 +191,24 @@ FlutterGLCompositor *flutter_gl_compositor_new(EGLDisplay egl_display,
         return NULL;
     }
 
-    if (!setup_blit(self)) {
+    /* Make the renderer context current so setup_blit can create GL resources. */
+    if (!eglMakeCurrent(self->egl_display, self->renderer_egl_surface,
+                        self->renderer_egl_surface,
+                        self->renderer_egl_context)) {
+        g_warning("FlutterGLCompositor: failed to make renderer context current");
         flutter_gl_compositor_free(self);
         return NULL;
     }
+
+    if (!setup_blit(self)) {
+        eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                       EGL_NO_CONTEXT);
+        flutter_gl_compositor_free(self);
+        return NULL;
+    }
+
+    eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                   EGL_NO_CONTEXT);
 
     return self;
 }
