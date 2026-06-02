@@ -1,8 +1,24 @@
 #include "flutter_view.h"
 
+#include <EGL/egl.h>
+#include <GLES2/gl2.h>
 #include <gdk/gdkwayland.h>
 #include <string.h>
 #include <wayland-client.h>
+#include <wayland-egl.h>
+
+/* GLES3 constants not in GLES2 headers */
+#ifndef GL_READ_FRAMEBUFFER
+#define GL_READ_FRAMEBUFFER 0x8CA8
+#endif
+#ifndef GL_DRAW_FRAMEBUFFER
+#define GL_DRAW_FRAMEBUFFER 0x8CA9
+#endif
+
+typedef void (GL_APIENTRY *PFNGLBLITFRAMEBUFFERPROC)(
+    GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
+    GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
+    GLbitfield mask, GLenum filter);
 
 struct _FlutterView {
     GtkDrawingArea parent_instance;
@@ -18,6 +34,21 @@ struct _FlutterView {
     struct wl_subcompositor *subcompositor;
     struct wl_surface       *surface;
     struct wl_subsurface    *subsurface;
+
+    struct wl_egl_window *egl_window;
+    EGLDisplay            egl_display;
+    EGLContext            egl_context;
+    EGLSurface            egl_surface;
+
+    /* GL resources for the texture blit (shader fallback) */
+    GLuint gl_program;
+    GLuint gl_vbo;
+    GLint  gl_position_loc;
+    GLint  gl_texture_loc;
+
+    /* glBlitFramebuffer path (preferred when available) */
+    PFNGLBLITFRAMEBUFFERPROC p_glBlitFramebuffer;
+    GLuint                   blit_read_fbo;
 
     /* ── gdk_cairo_draw_from_gl mode fields ──────────────────────────────── */
 
@@ -70,6 +101,241 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = registry_global_remove,
 };
 
+/* ── GL helpers (subsurface mode) ─────────────────────────────────────────── */
+
+static GLuint compile_shader(GLenum type, const char *src) {
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &src, NULL);
+    glCompileShader(shader);
+
+    GLint compile_status;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compile_status);
+    if (compile_status == GL_FALSE) {
+        char log[512];
+        glGetShaderInfoLog(shader, sizeof(log), NULL, log);
+        g_warning("Shader compile error: %s", log);
+        glDeleteShader(shader);
+        return 0;
+    }
+    return shader;
+}
+
+static gboolean setup_blit_gl(FlutterView *self) {
+    /* Try to get glBlitFramebuffer (available in GLES 3.0+). */
+    self->p_glBlitFramebuffer = (PFNGLBLITFRAMEBUFFERPROC)
+        eglGetProcAddress("glBlitFramebuffer");
+    if (self->p_glBlitFramebuffer) {
+        glGenFramebuffers(1, &self->blit_read_fbo);
+        return TRUE;
+    }
+
+    /* Fallback: compile a shader program for full-screen texture blit. */
+    static const char *vert_src =
+        "attribute vec2 a_position;\n"
+        "varying vec2 v_uv;\n"
+        "void main() {\n"
+        "    gl_Position = vec4(a_position, 0.0, 1.0);\n"
+        "    v_uv = a_position * 0.5 + vec2(0.5);\n"
+        "}\n";
+
+    static const char *frag_src =
+        "precision mediump float;\n"
+        "uniform sampler2D u_texture;\n"
+        "varying vec2 v_uv;\n"
+        "void main() {\n"
+        "    gl_FragColor = texture2D(u_texture, v_uv);\n"
+        "}\n";
+
+    GLuint vert = compile_shader(GL_VERTEX_SHADER,   vert_src);
+    if (vert == 0) return FALSE;
+    GLuint frag = compile_shader(GL_FRAGMENT_SHADER, frag_src);
+    if (frag == 0) { glDeleteShader(vert); return FALSE; }
+
+    self->gl_program = glCreateProgram();
+    glAttachShader(self->gl_program, vert);
+    glAttachShader(self->gl_program, frag);
+    glLinkProgram(self->gl_program);
+    glDeleteShader(vert);
+    glDeleteShader(frag);
+
+    GLint link_status;
+    glGetProgramiv(self->gl_program, GL_LINK_STATUS, &link_status);
+    if (link_status == GL_FALSE) {
+        char log[512];
+        glGetProgramInfoLog(self->gl_program, sizeof(log), NULL, log);
+        g_warning("Shader link error: %s", log);
+        glDeleteProgram(self->gl_program);
+        self->gl_program = 0;
+        return FALSE;
+    }
+
+    self->gl_position_loc = glGetAttribLocation (self->gl_program, "a_position");
+    self->gl_texture_loc  = glGetUniformLocation(self->gl_program, "u_texture");
+
+    /* Full-screen quad as a triangle strip */
+    static const GLfloat vertices[] = {
+        -1.0f,  1.0f,
+        -1.0f, -1.0f,
+         1.0f,  1.0f,
+         1.0f, -1.0f,
+    };
+    glGenBuffers(1, &self->gl_vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, self->gl_vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    return TRUE;
+}
+
+static void teardown_blit_gl(FlutterView *self) {
+    if (self->blit_read_fbo) {
+        glDeleteFramebuffers(1, &self->blit_read_fbo);
+        self->blit_read_fbo = 0;
+    }
+    if (self->gl_vbo) {
+        glDeleteBuffers(1, &self->gl_vbo);
+        self->gl_vbo = 0;
+    }
+    if (self->gl_program) {
+        glDeleteProgram(self->gl_program);
+        self->gl_program = 0;
+    }
+}
+
+/* ── EGL setup (subsurface mode) ──────────────────────────────────────────── */
+
+static gboolean setup_egl(FlutterView *self, struct wl_display *display,
+                           size_t width, size_t height) {
+    self->egl_display = eglGetDisplay((EGLNativeDisplayType)display);
+    if (self->egl_display == EGL_NO_DISPLAY) {
+        g_warning("Failed to get EGL display");
+        return FALSE;
+    }
+    if (!eglInitialize(self->egl_display, NULL, NULL)) {
+        g_warning("Failed to initialize EGL");
+        return FALSE;
+    }
+
+    static const EGLint config_attribs[] = {
+        EGL_SURFACE_TYPE,    EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+        EGL_RED_SIZE,        8,
+        EGL_GREEN_SIZE,      8,
+        EGL_BLUE_SIZE,       8,
+        EGL_ALPHA_SIZE,      8,
+        EGL_NONE,
+    };
+    EGLConfig config;
+    EGLint    num_configs;
+    if (!eglChooseConfig(self->egl_display, config_attribs, &config, 1,
+                         &num_configs) || num_configs == 0) {
+        g_warning("Failed to choose EGL config");
+        return FALSE;
+    }
+
+    eglBindAPI(EGL_OPENGL_ES_API);
+
+    static const EGLint context_attribs[] = {
+        EGL_CONTEXT_CLIENT_VERSION, 2,
+        EGL_NONE,
+    };
+    self->egl_context = eglCreateContext(self->egl_display, config,
+                                         EGL_NO_CONTEXT, context_attribs);
+    if (self->egl_context == EGL_NO_CONTEXT) {
+        g_warning("Failed to create EGL context");
+        return FALSE;
+    }
+
+    self->egl_window = wl_egl_window_create(self->surface,
+                                             width * self->scale,
+                                             height * self->scale);
+    if (!self->egl_window) {
+        g_warning("Failed to create wl_egl_window");
+        return FALSE;
+    }
+
+    self->egl_surface = eglCreateWindowSurface(
+        self->egl_display, config,
+        (EGLNativeWindowType)self->egl_window, NULL);
+    if (self->egl_surface == EGL_NO_SURFACE) {
+        g_warning("Failed to create EGL window surface");
+        return FALSE;
+    }
+
+    wl_surface_set_buffer_scale(self->surface, self->scale);
+
+    eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
+                   self->egl_context);
+    eglSwapInterval(self->egl_display, 0);
+
+    if (!setup_blit_gl(self))
+        return FALSE;
+
+    /* Create the GL compositor (renderer context) sharing with our context. */
+    self->gl_compositor = flutter_gl_compositor_new(self->egl_display,
+                                                    self->egl_context);
+    if (!self->gl_compositor)
+        return FALSE;
+
+    /* Release the EGL context so the renderer thread can use it. */
+    eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                   EGL_NO_CONTEXT);
+    return TRUE;
+}
+
+/* Render a solid clear — used as the initial frame. */
+static void render_clear(FlutterView *self, size_t width, size_t height) {
+    eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
+                   self->egl_context);
+    glViewport(0, 0, width, height);
+    glClearColor(0.15f, 0.15f, 0.15f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    eglSwapBuffers(self->egl_display, self->egl_surface);
+    eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                   EGL_NO_CONTEXT);
+}
+
+/* Blit a texture to the EGL surface and swap. */
+static void render_texture(FlutterView *self,
+                            GLuint texture_id,
+                            size_t width, size_t height) {
+    eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
+                   self->egl_context);
+
+    if (self->p_glBlitFramebuffer) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, self->blit_read_fbo);
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, texture_id, 0);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        self->p_glBlitFramebuffer(0, 0, (GLint)width, (GLint)height,
+                                  0, 0, (GLint)width, (GLint)height,
+                                  GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    } else {
+        glViewport(0, 0, width, height);
+
+        glUseProgram(self->gl_program);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texture_id);
+        glUniform1i(self->gl_texture_loc, 0);
+
+        glBindBuffer(GL_ARRAY_BUFFER, self->gl_vbo);
+        glEnableVertexAttribArray(self->gl_position_loc);
+        glVertexAttribPointer(self->gl_position_loc, 2, GL_FLOAT,
+                              GL_FALSE, 0, 0);
+
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+        glDisableVertexAttribArray(self->gl_position_loc);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glUseProgram(0);
+    }
+
+    eglSwapBuffers(self->egl_display, self->egl_surface);
+}
+
 /* ── GtkWidget vfuncs ─────────────────────────────────────────────────────── */
 
 static void realize_subsurface(FlutterView *self, GtkWidget *widget) {
@@ -113,14 +379,11 @@ static void realize_subsurface(FlutterView *self, GtkWidget *widget) {
     gtk_widget_get_allocation(widget, &alloc);
     self->scale = gtk_widget_get_scale_factor(widget);
 
-    self->gl_compositor = flutter_gl_compositor_new_subsurface(
-        display, self->surface, alloc.width, alloc.height, self->scale);
-    if (!self->gl_compositor)
+    if (!setup_egl(self, display, alloc.width, alloc.height))
         return;
 
-    flutter_gl_compositor_render_clear(self->gl_compositor,
-                                        (size_t)alloc.width * self->scale,
-                                        (size_t)alloc.height * self->scale);
+    render_clear(self, (size_t)alloc.width * self->scale,
+                       (size_t)alloc.height * self->scale);
 }
 
 static void realize_gl(FlutterView *self, GtkWidget *widget) {
@@ -151,8 +414,8 @@ static void realize_gl(FlutterView *self, GtkWidget *widget) {
     EGLContext gdk_egl_context = eglGetCurrentContext();
     gdk_gl_context_clear_current();
 
-    self->gl_compositor = flutter_gl_compositor_new_gdk(egl_display,
-                                                        gdk_egl_context);
+    self->gl_compositor = flutter_gl_compositor_new(egl_display,
+                                                    gdk_egl_context);
 }
 
 static void flutter_view_realize(GtkWidget *widget) {
@@ -183,6 +446,27 @@ static void flutter_view_unrealize(GtkWidget *widget) {
     }
 
     if (self->use_subsurface) {
+        if (self->egl_display != EGL_NO_DISPLAY) {
+            eglMakeCurrent(self->egl_display, self->egl_surface,
+                           self->egl_surface, self->egl_context);
+            teardown_blit_gl(self);
+            eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                           EGL_NO_CONTEXT);
+            if (self->egl_surface != EGL_NO_SURFACE)
+                eglDestroySurface(self->egl_display, self->egl_surface);
+            if (self->egl_context != EGL_NO_CONTEXT)
+                eglDestroyContext(self->egl_display, self->egl_context);
+            eglTerminate(self->egl_display);
+            self->egl_surface = EGL_NO_SURFACE;
+            self->egl_context = EGL_NO_CONTEXT;
+            self->egl_display = EGL_NO_DISPLAY;
+        }
+
+        if (self->egl_window) {
+            wl_egl_window_destroy(self->egl_window);
+            self->egl_window = NULL;
+        }
+
         if (self->subsurface) {
             wl_subsurface_destroy(self->subsurface);
             self->subsurface = NULL;
@@ -216,7 +500,8 @@ static void flutter_view_size_allocate(GtkWidget     *widget,
         gtk_widget_translate_coordinates(widget, toplevel, 0, 0, &x, &y);
         wl_subsurface_set_position(self->subsurface, x, y);
 
-        flutter_gl_compositor_resize(self->gl_compositor, pw, ph);
+        if (self->egl_window)
+            wl_egl_window_resize(self->egl_window, pw, ph, 0, 0);
     }
 
     /* Block until the renderer delivers a frame at the new size. */
@@ -316,6 +601,9 @@ static void flutter_view_class_init(FlutterViewClass *klass) {
 }
 
 static void flutter_view_init(FlutterView *self) {
+    self->egl_display = EGL_NO_DISPLAY;
+    self->egl_context = EGL_NO_CONTEXT;
+    self->egl_surface = EGL_NO_SURFACE;
     g_mutex_init(&self->resize_mutex);
     g_cond_init(&self->resize_cond);
     g_mutex_init(&self->present_mutex);
@@ -351,10 +639,24 @@ static gboolean queue_draw_idle(gpointer data) {
 }
 
 static void present_subsurface(FlutterView *self,
-                               GLuint texture_id, GLenum texture_format,
+                               GLuint texture_id,
                                size_t width, size_t height) {
-    flutter_gl_compositor_present(self->gl_compositor,
-                                   texture_id, texture_format, width, height);
+    if (self->egl_display == EGL_NO_DISPLAY ||
+        self->egl_surface == EGL_NO_SURFACE)
+        return;
+
+    EGLint cur_w, cur_h;
+    eglQuerySurface(self->egl_display, self->egl_surface, EGL_WIDTH,  &cur_w);
+    eglQuerySurface(self->egl_display, self->egl_surface, EGL_HEIGHT, &cur_h);
+    if ((size_t)cur_w != width || (size_t)cur_h != height)
+        wl_egl_window_resize(self->egl_window, width, height, 0, 0);
+
+    render_texture(self, texture_id, width, height);
+
+    /* Restore the renderer context. */
+    EGLDisplay dpy = flutter_gl_compositor_get_egl_display(self->gl_compositor);
+    flutter_gl_compositor_make_current(self->gl_compositor);
+    (void)dpy;
 
     /* Signal any blocked resize if this frame matches the expected size. */
     g_mutex_lock(&self->resize_mutex);
@@ -419,11 +721,11 @@ void flutter_view_collect_backing_store(FlutterView         *self,
 
 void flutter_view_present(FlutterView *self,
                           GLuint       texture_id,
-                          GLenum       texture_format,
+                          GLenum       texture_format G_GNUC_UNUSED,
                           size_t       width,
                           size_t       height) {
     if (self->use_subsurface)
-        present_subsurface(self, texture_id, texture_format, width, height);
+        present_subsurface(self, texture_id, width, height);
     else
         present_gl(self, texture_id, width, height);
 }
