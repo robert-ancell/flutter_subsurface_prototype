@@ -1,6 +1,6 @@
 #include <gtk/gtk.h>
 
-#include "renderer.h"
+#include "renderer_gl.h"
 #include "flutter_renderer.h"
 #include "flutter_gl_renderer.h"
 #include "flutter_subsurface_renderer.h"
