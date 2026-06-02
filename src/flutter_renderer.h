@@ -1,7 +1,5 @@
 #pragma once
 
-#include <EGL/egl.h>
-#include <GLES2/gl2.h>
 #include <gtk/gtk.h>
 
 #include "embedder.h"
@@ -33,11 +31,8 @@ struct _FlutterRendererInterface {
                                                  size_t           height);
     void (*collect_backing_store)(FlutterRenderer     *self,
                                   FlutterBackingStore *backing_store);
-    void (*present)(FlutterRenderer *self,
-                    GLuint           texture_id,
-                    GLenum           texture_format,
-                    size_t           width,
-                    size_t           height);
+    void (*present)(FlutterRenderer     *self,
+                    FlutterBackingStore *backing_store);
     gboolean (*make_current)(FlutterRenderer *self);
     void     (*clear_current)(FlutterRenderer *self);
 };
@@ -72,19 +67,13 @@ void flutter_renderer_collect_backing_store(FlutterRenderer     *self,
 /**
  * flutter_renderer_present:
  * @self: the renderer
- * @texture_id: OpenGL texture containing the rendered frame
- * @texture_format: GL format of the texture (e.g. %GL_RGBA)
- * @width: frame width in pixels
- * @height: frame height in pixels
+ * @backing_store: the backing store containing the rendered frame
  *
  * Presents a rendered frame to the display.
  * Must be called from the render thread.
  */
-void flutter_renderer_present(FlutterRenderer *self,
-                               GLuint           texture_id,
-                               GLenum           texture_format,
-                               size_t           width,
-                               size_t           height);
+void flutter_renderer_present(FlutterRenderer     *self,
+                               FlutterBackingStore *backing_store);
 
 /**
  * flutter_renderer_make_current:

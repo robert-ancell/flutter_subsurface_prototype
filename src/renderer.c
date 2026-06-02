@@ -225,10 +225,7 @@ static gpointer renderer_thread_func(gpointer data) {
         float angle   = elapsed * ((float)G_PI * 2.0f / 4.0f); /* one rotation per 4 s */
 
         render_frame(r, angle);
-        flutter_renderer_present(r->renderer,
-                             r->backing_store->opengl.texture, GL_RGBA,
-                             r->backing_store->width,
-                             r->backing_store->height);
+        flutter_renderer_present(r->renderer, r->backing_store);
     }
 
     teardown_gl(r);

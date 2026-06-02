@@ -273,16 +273,18 @@ static gboolean queue_draw_idle(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
-static void flutter_subsurface_renderer_present(FlutterRenderer *renderer,
-                                                 GLuint           texture_id,
-                                                 GLenum           texture_format G_GNUC_UNUSED,
-                                                 size_t           width,
-                                                 size_t           height) {
+static void flutter_subsurface_renderer_present(FlutterRenderer     *renderer,
+                                                 FlutterBackingStore *backing_store) {
+    g_assert(backing_store->type == FLUTTER_BACKING_STORE_TYPE_OPENGL);
+
     FlutterSubsurfaceRenderer *self = FLUTTER_SUBSURFACE_RENDERER(renderer);
 
     if (self->egl_display == EGL_NO_DISPLAY ||
         self->egl_surface == EGL_NO_SURFACE)
         return;
+
+    size_t width  = backing_store->width;
+    size_t height = backing_store->height;
 
     EGLint cur_w, cur_h;
     eglQuerySurface(self->egl_display, self->egl_surface, EGL_WIDTH,  &cur_w);
@@ -292,7 +294,8 @@ static void flutter_subsurface_renderer_present(FlutterRenderer *renderer,
 
     eglMakeCurrent(self->egl_display, self->egl_surface, self->egl_surface,
                    self->egl_context);
-    flutter_gl_compositor_blit(self->gl_compositor, texture_id, width, height);
+    flutter_gl_compositor_blit(self->gl_compositor,
+                               backing_store->opengl.texture, width, height);
     eglSwapBuffers(self->egl_display, self->egl_surface);
 
     flutter_gl_compositor_make_current(self->gl_compositor);

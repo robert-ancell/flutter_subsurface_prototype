@@ -16,12 +16,9 @@ void flutter_renderer_collect_backing_store(FlutterRenderer     *self,
     FLUTTER_RENDERER_GET_IFACE(self)->collect_backing_store(self, backing_store);
 }
 
-void flutter_renderer_present(FlutterRenderer *self,
-                               GLuint           texture_id,
-                               GLenum           texture_format,
-                               size_t           width,
-                               size_t           height) {
-    FLUTTER_RENDERER_GET_IFACE(self)->present(self, texture_id, texture_format, width, height);
+void flutter_renderer_present(FlutterRenderer     *self,
+                               FlutterBackingStore *backing_store) {
+    FLUTTER_RENDERER_GET_IFACE(self)->present(self, backing_store);
 }
 
 gboolean flutter_renderer_make_current(FlutterRenderer *self) {

@@ -188,16 +188,18 @@ static gboolean queue_draw_idle(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
-static void flutter_gl_renderer_present_impl(FlutterRenderer *renderer,
-                                              GLuint           texture_id,
-                                              GLenum           texture_format G_GNUC_UNUSED,
-                                              size_t           width,
-                                              size_t           height) {
+static void flutter_gl_renderer_present_impl(FlutterRenderer     *renderer,
+                                              FlutterBackingStore *backing_store) {
+    g_assert(backing_store->type == FLUTTER_BACKING_STORE_TYPE_OPENGL);
+
     FlutterGLRenderer *self = FLUTTER_GL_RENDERER(renderer);
+
+    size_t width  = backing_store->width;
+    size_t height = backing_store->height;
 
     g_mutex_lock(&self->present_mutex);
 
-    self->present_texture = texture_id;
+    self->present_texture = backing_store->opengl.texture;
     self->present_width   = width;
     self->present_height  = height;
     self->has_frame       = TRUE;
