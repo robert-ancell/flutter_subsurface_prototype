@@ -18,7 +18,9 @@ typedef struct {
  * @share_context: the EGL context to share with
  *
  * Creates a compositor that provides a renderer EGL context sharing
- * objects with @share_context, and manages backing store textures.
+ * objects with @share_context, manages backing store textures, and
+ * sets up GL resources for blitting textures. An appropriate EGL
+ * context must be current when calling this function.
  *
  * Returns: a new compositor, or %NULL on failure.
  */
@@ -47,23 +49,6 @@ gboolean flutter_gl_compositor_make_current(FlutterGLCompositor *compositor);
  * Releases the EGL context from the calling thread.
  */
 void flutter_gl_compositor_clear_current(FlutterGLCompositor *compositor);
-
-/**
- * flutter_gl_compositor_setup_blit:
- *
- * Sets up GL resources for blitting textures to the default framebuffer.
- * Must be called with an appropriate EGL context current.
- * Uses glBlitFramebuffer when available, otherwise compiles a shader.
- */
-gboolean flutter_gl_compositor_setup_blit(FlutterGLCompositor *compositor);
-
-/**
- * flutter_gl_compositor_teardown_blit:
- *
- * Releases GL blit resources. Must be called with the same EGL context
- * that was current during setup_blit.
- */
-void flutter_gl_compositor_teardown_blit(FlutterGLCompositor *compositor);
 
 /**
  * flutter_gl_compositor_blit:

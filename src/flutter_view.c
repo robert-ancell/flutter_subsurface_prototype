@@ -150,9 +150,6 @@ static gboolean setup_egl(FlutterView *self, struct wl_display *display,
     if (!self->gl_compositor)
         return FALSE;
 
-    if (!flutter_gl_compositor_setup_blit(self->gl_compositor))
-        return FALSE;
-
     /* Release the EGL context so the renderer thread can use it. */
     eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
                    EGL_NO_CONTEXT);
@@ -287,17 +284,15 @@ static void flutter_view_unrealize(GtkWidget *widget) {
         g_clear_object(&self->gdk_gl_context);
     }
 
-    if (self->use_subsurface && self->egl_display != EGL_NO_DISPLAY) {
-        eglMakeCurrent(self->egl_display, self->egl_surface,
-                       self->egl_surface, self->egl_context);
-        flutter_gl_compositor_teardown_blit(self->gl_compositor);
-        eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
-                       EGL_NO_CONTEXT);
-    }
-
     if (self->gl_compositor) {
+        if (self->use_subsurface && self->egl_display != EGL_NO_DISPLAY)
+            eglMakeCurrent(self->egl_display, self->egl_surface,
+                           self->egl_surface, self->egl_context);
         flutter_gl_compositor_free(self->gl_compositor);
         self->gl_compositor = NULL;
+        if (self->use_subsurface && self->egl_display != EGL_NO_DISPLAY)
+            eglMakeCurrent(self->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                           EGL_NO_CONTEXT);
     }
 
     if (self->use_subsurface) {
